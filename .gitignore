@@ -1,0 +1,21 @@
+# secrets
+.env
+.env.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# modal
+.modal/
+
+# node / dashboard
+node_modules/
+.next/
+dashboard/.env*
+
+# os
+.DS_Store
