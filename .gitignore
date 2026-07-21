@@ -1,21 +1,56 @@
-# secrets
+# =============================================================
+# Secrets — NEVER commit
+# =============================================================
 .env
-.env.local
+.env.*
+!.env.example
 
-# python
+# =============================================================
+# Python
+# =============================================================
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
 .venv/
 venv/
-*.egg-info/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.python-version
 
-# modal
-.modal/
-
-# node / dashboard
+# =============================================================
+# Node / Next.js (dashboard/)
+# =============================================================
 node_modules/
 .next/
-dashboard/.env*
+out/
+.turbo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.vercel
 
-# os
+# =============================================================
+# Modal
+# =============================================================
+.modal/
+
+# =============================================================
+# OS / editor
+# =============================================================
 .DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

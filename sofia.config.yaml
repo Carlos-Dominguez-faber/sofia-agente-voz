@@ -1,0 +1,251 @@
+# =============================================================
+# sofia.config.yaml — business data for `agente-voz-ghl`
+#
+# THIS FILE IS VERSIONED. It describes the business; it grants
+# access to nothing. Secrets live in .env (gitignored).
+#
+# Hard rule: if a value identifies the business -> here.
+#            if a value grants access to a service -> .env.
+#
+# Source of truth for these decisions: planeacion.md
+# Values marked PENDIENTE_* are open questions, not defaults.
+# =============================================================
+
+business:
+  name: "Clínica Dental Sonrisa Perfecta"
+  industry: dental
+  website: "clinicasonrisaperfecta.site"
+  timezone: "America/Cancun"        # UTC-5 year-round, NO DST — see note below
+  country: MX
+  locale: "es-MX"
+  # RESUELTO: el horario declarado ahora coincide con la agenda real.
+  # El calendario "Limpieza Dental" de GHL devuelve slots de 08:00 a 16:30
+  # (última cita 16:30 + 30 min = cierre 17:00), de lunes a viernes.
+  # Antes el config decía 9:00 y Sofía ofrecía las 8 igual, porque el backend
+  # se las entregaba como disponibles: la agenda manda, no la instrucción.
+  hours: "Lunes a viernes de 8:00 a 17:00"
+  hours_start: "08:00"
+  hours_end: "17:00"
+
+# -------------------------------------------------------------
+# TIMEZONE WARNING — read before writing book_appointment
+# -------------------------------------------------------------
+# America/Cancun is UTC-05:00 all year. It does NOT observe DST and it is
+# NOT the same as Mexico City (-06:00), which the briefs use as an example.
+# Verified against GHL free-slots: 2026-07-21T08:00:00-05:00
+#
+# Always DERIVE the offset from `business.timezone`. Never hardcode it.
+# A hardcoded offset books every appointment one hour off.
+# -------------------------------------------------------------
+
+agent:
+  name: "Sofía"
+  role: "Recepcionista de la clínica"
+  tone: "amable, empático, tranquilizador"
+  # Mucha gente que llama a un dentista llama con miedo o con dolor.
+  # Ese es el estado emocional que Sofía tiene que sostener.
+
+  voice:
+    provider: elevenlabs
+    language: "es-MX"
+    style: "cálido"
+    voice_id: PENDIENTE_VOICE_ID     # ElevenLabs es-MX — falta elegirla
+    speak_during_execution: true     # habla mientras consulta disponibilidad
+
+  llm:
+    model: claude-haiku              # verificar nombre exacto en el selector de Retell
+    temperature: 0.35                # 0.3-0.4 — precisión sobre creatividad
+
+  # Las tres cosas que Sofía hace. Nada más.
+  jobs:
+    - "Contestar 24/7"
+    - "Calificar a quien llama"
+    - "Agendar una cita de valoración"
+
+  # Lo que NO hace — tan importante como lo que sí.
+  guardrails:
+    never_diagnoses: true
+    diagnosis_deflection: "El doctor te valora en la cita"
+    prices_are_always_approximate: true
+    # Sofía nunca escribe en el expediente clínico (contact.notas_clinicas).
+    # Misma línea del "nunca diagnostica", aplicada a los datos.
+    never_writes_clinical_record: true
+
+  end_call:
+    # Gotcha: Retell outbound no cuelga solo. Sin esto la llamada
+    # se queda abierta consumiendo minutos.
+    enable_end_call_tool: true
+    end_call_after_silence_ms: 10000
+
+# -------------------------------------------------------------
+# Preguntas de calificación — EL ORDEN IMPORTA
+# Pedir el teléfono antes de escuchar el problema hace que cuelguen.
+# -------------------------------------------------------------
+qualification:
+  questions:
+    - order: 1
+      key: motivo
+      ask: "Motivo de la llamada"
+      maps_to_field: "contact.reason_for_visit"
+
+    - order: 2
+      key: sintoma_urgencia
+      ask: "Síntoma y urgencia"
+      triggers_urgency: true
+
+    - order: 3
+      key: tratamiento_interes
+      ask: "Tratamiento de interés"
+
+    - order: 4
+      key: datos_contacto
+      ask: "Nombre, teléfono y correo"
+      # Al final, ya con confianza construida.
+
+  urgency:
+    # DOLOR, HINCHAZÓN o SANGRADO -> urgencia, priorizar.
+    triggers: ["dolor", "hinchazón", "sangrado"]
+    action: "Ofrecer el hueco disponible más cercano y marcar como urgencia"
+    # "Priorizar" = agendar antes. NO = interpretar el síntoma.
+    # La regla de nunca diagnosticar sigue vigente en urgencia.
+
+pacing:
+  phone_digit_by_digit: true         # confirmando al final
+  spell_out_emails: true
+  pause_after_availability_check_s: 3
+  say_slots_once: true               # formato hablado: "el martes a las cuatro de la tarde"
+  accuracy_over_speed: true          # cuando dude, frena
+
+# -------------------------------------------------------------
+# KNOWLEDGE BASE — tratamientos
+#
+# Por qué viven AQUÍ y no en una base de datos: en dental no hay
+# inventario que buscar. La lista es fija y corta. Eso nos ahorra un
+# endpoint, una fuente de datos y toda una clase de bugs
+# (inventario desactualizado, "te ofrecí algo que ya no está").
+#
+# TODOS los precios son APROXIMADOS, siempre. El precio final sale
+# de la valoración.
+# -------------------------------------------------------------
+knowledge_base:
+  currency: MXN
+  prices_are_approximate: true
+
+  treatments:
+    - key: limpieza
+      name: "Limpieza dental"
+      price_approx: 800
+
+    - key: blanqueamiento
+      name: "Blanqueamiento"
+      price_approx: 3500
+
+    - key: ortodoncia
+      name: "Ortodoncia"
+      price_approx: 500
+      unit: mensual                  # ~$500 AL MES, no precio total
+
+    - key: implante
+      name: "Implante"
+      price_approx: 15000
+
+    - key: endodoncia
+      name: "Endodoncia"
+      price_approx: 4000
+
+  valoracion:
+    name: "Cita de valoración"
+    # RESUELTO: la valoración cuesta $500 y es REEMBOLSABLE — se descuenta
+    # del tratamiento si el paciente lo toma. Esa es la línea de cierre más
+    # fuerte que tiene Sofía: no es un gasto, es un anticipo.
+    # Sofía SIEMPRE dice el costo y el reembolso en la misma frase, y SIEMPRE
+    # antes de buscar horarios. Nadie se entera del precio después de apartar.
+    # (Nota: no confundir con "ortodoncia ~$500 mensuales" — son dos cosas.)
+    price_approx: 500
+    refundable: true
+    refund_note: "Se descuenta del tratamiento si el paciente lo toma"
+
+# -------------------------------------------------------------
+# CRM — mapeo a GoHighLevel
+#
+# GHL es la ÚNICA fuente de la verdad: contactos, calendario y pipeline
+# en una sola Location. El backend no guarda estado propio.
+#
+# IDs verificados en vivo contra la Location (2026-07-20).
+# El PIT y el location_id viven en .env, NO aquí.
+# -------------------------------------------------------------
+crm:
+  provider: gohighlevel
+  api_base: "https://services.leadconnectorhq.com"
+  api_version: "2021-07-28"
+  # location_id -> .env HIGHLEVEL_LOCATION_ID
+  # auth        -> .env HIGHLEVEL_PIT (Bearer)
+
+  calendar_id: "CAyujBZ84e9YzfVl4EMV"        # "Limpieza Dental" — ver nota abajo
+  pipeline_id: "AJeNrg03SbkJ5JbhRs0l"        # "Nuevos Pacientes"
+  stage_id: "072d84e4-5829-46dd-b749-2e61d57a836b"   # "Cita Agendada"
+
+  # NOTA sobre el calendario: el brief asume uno llamado "Valoración dental".
+  # No existe. Decisión tomada: usar "Limpieza Dental" (activo, devuelve slots).
+  # Deuda consciente: las valoraciones caen en la agenda de limpiezas.
+  # Separarlas cuando crezca el volumen.
+  # El otro calendario, "Dental Consultation" (CKj17k1fVAiGmnz8DpsD), está INACTIVO.
+
+  pipeline_stages:
+    # Solo existe un pipeline en la Location. Las citas entran en posición 2.
+    new_lead: "447cc31f-0e7b-4a9c-afb4-9c26af4276e8"
+    engagement: "9a93789f-23b8-4b28-9225-bd5fb2207168"
+    cita_agendada: "072d84e4-5829-46dd-b749-2e61d57a836b"
+    asistio_a_cita: "84d685ec-e383-4833-8c35-abb78441636f"
+    no_asistio: "5fbce81e-f573-4a00-b1fc-37f2cea24548"   # alimenta el worker outbound
+    tratamiento_en_proceso: "b2b72d6c-679c-4cb6-ac30-a0df8fd75f78"
+    cliente_ganado: "e109c91e-fdea-47fc-8c44-452ed4e7f332"
+
+  custom_fields:
+    # Todos verificados contra la Location (2026-07-20). Los cuatro del
+    # post-llamada se crearon vía API; sus fieldKey salieron exactos.
+    reason_for_visit: "contact.reason_for_visit"            # id BVK7cWvDgpH3Y7agkkSf
+    interes_score: "contact.interes_score"                  # NUMERICAL 1-10 · id CYoF8fiHIYXxneFqN4Mq
+    nivel_urgencia: "contact.nivel_urgencia"                # TEXT urgente|normal|baja · id M0550APKstKtCTprbQUr
+    probabilidad_asistir: "contact.probabilidad_asistir"    # NUMERICAL 1-10 · id aUZLaTm63QQIAX5NNA6I
+    resumen_llamada: "contact.resumen_llamada"              # LARGE_TEXT · id Gm5rxFLPuE7y00IUI1kF
+
+  # NO USAR — campos que existen pero no nos tocan:
+  #   contact.notas_clinicas         -> expediente clínico, lo escribe el doctor.
+  #                                     El resumen de Sofía NUNCA va aquí: es output de
+  #                                     un modelo sobre una transcripción de teléfono, y
+  #                                     alguien acabaría leyéndolo como observación clínica.
+  #   contact.fecha_de_ultima_visita -> lo llena la clínica
+  #   contact.fecha_vencimiento_cupon -> marketing
+
+  tags:
+    # Temperatura del lead, vía POST /contacts/:id/tags
+    temperature: ["hot", "warm", "cold"]
+    # PENDIENTE: fijar el criterio junto con el análisis post-llamada.
+    # Preliminar: urgencia + interés alto -> hot.
+    criteria: PENDIENTE_CONFIRMAR
+
+  rules:
+    phone_format: E164               # siempre, con + y lada
+    appointment_format: iso8601_with_offset   # nunca UTC pelón
+    upsert_idempotent_by_phone: true
+    free_slots_max_days: 31
+    free_slots_filter_keys: ["traceId"]       # no son fechas, truenan el parseo
+    # Si GHL falla, el agente NO miente: error honesto + seguimiento humano.
+    # Nunca un "ya quedó agendado" falso.
+    fail_honestly: true
+    failure_message: "Déjame confirmártelo, en un momento te contacta una persona del equipo"
+
+# -------------------------------------------------------------
+# OUTBOUND — worker en Modal, cada hora
+# -------------------------------------------------------------
+outbound:
+  enabled: true
+  schedule_cron: "0 * * * *"
+  targets:
+    - no_shows        # stage "No Asistió"
+    - leads_frescos
+  goal: "Recalificar y reagendar"
+  # PENDIENTE: ventana horaria permitida para llamar.
+  # No se llama a un paciente a las 3 de la mañana porque el cron se despertó.
+  call_window: PENDIENTE_CONFIRMAR

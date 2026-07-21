@@ -122,6 +122,9 @@ Dos archivos, dos naturalezas distintas. **No mezclar.**
 Regla dura: **si un valor identifica al negocio, va al YAML; si da acceso a un servicio, va al
 `.env`.** Nunca hardcodear credenciales en el código.
 
+> **Estado actual:** `sofia.config.yaml` todavía no existe. Se genera en el siguiente paso,
+> cuando esté la planeación — hasta entonces no hay contenido real que ponerle.
+
 ---
 
 ## 5. Credenciales
@@ -165,8 +168,8 @@ ANTHROPIC_API_KEY=
 ```
 agente-voz-ghl/
 ├── BRIEF.md · BRIEF-TECNICO.md · CLAUDE.md
+├── .gitignore · .env.example · .env    # ← lo único que existe hoy, además de los briefs
 ├── sofia.config.yaml          # datos del negocio (se versiona)
-├── .env.example               # plantilla vacía de credenciales
 ├── pyproject.toml
 ├── prompts/
 │   ├── dental.yaml            # ← nicho ancla (Sonrisa Perfecta)
@@ -229,6 +232,9 @@ Qué mostrará: métricas (llamadas totales, citas agendadas, tasa de éxito, du
 costos), llamadas recientes con transcripción y resumen, temperatura de leads y funnel,
 edición del prompt del agente sin entrar a Retell, disparo de una llamada outbound manual y
 branding por cliente.
+
+> El "sin entrar a Retell" es el argumento de negocio: es lo que sostiene el
+> **mantenimiento mensual**.
 
 **Qué implica para el backend hoy:**
 
