@@ -292,13 +292,58 @@ Las herramientas antes que el agente. Nada de esto se construye todavía.
 
 ## 9. Los pendientes, en un solo lugar
 
+**Cerrados** (2026-07-20 / 21): precio de la valoración ($500 reembolsable) ·
+los 4 custom fields creados en GHL · Modal CLI instalado y autenticado ·
+horario de atención (lunes a viernes 8:00–17:00, alineado con la agenda real).
+
+**Abiertos:**
+
 | # | Pendiente | Bloquea |
 |---|---|---|
-| 1 | **Precio de la cita de valoración** (¿gratis o con costo?) | el prompt y el cierre de venta |
-| 2 | **Crear los 4 custom fields** del post-llamada | paso 3 |
-| 3 | **Instalar Modal CLI** (`pip install modal` → `modal token new`) | paso 6 |
-| 4 | **`voice_id` de ElevenLabs** es-MX | creación del agente en Retell |
-| 5 | Horario de atención de la clínica (para el KB y el outbound) | prompt + worker |
-| 6 | *Deuda consciente:* separar el calendario de valoración del de limpiezas | cuando crezca el volumen |
+| 1 | **`voice_id` de ElevenLabs** es-MX | hoy corre con `retell-Andrea` (voz de plataforma, mexicana). Solo si se quiere cambiar de proveedor. |
+| 2 | **Criterio de tags** hot/warm/cold | nada — Claude ya los asigna; falta fijar el criterio explícito en el config |
+| 3 | **Ventana horaria del outbound** | paso 6 (worker) |
+| 4 | **Prompt outbound** y los otros 4 nichos | paso 6 y la reventa del sistema |
+| 5 | *Deuda consciente:* separar el calendario de valoración del de limpiezas | cuando crezca el volumen |
 
-Ninguno bloquea el **paso 1** — la capa GHL se puede empezar hoy.
+---
+
+## 10. Estado al cierre de la sesión del 2026-07-21
+
+**Construido y desplegado.** Pasos 1, 2, 3 y 6 (parcial) del orden de construcción.
+
+| Pieza | Estado |
+|---|---|
+| `ghl_service.py` | ✅ 4 funciones + tags, notas, custom fields, `test_connection` |
+| `main.py` | ✅ 6 endpoints, desplegado en Modal |
+| `anthropic_service.py` | ✅ análisis post-llamada con `claude-opus-4-8`, salida validada |
+| `retell_service.py` | ✅ crea y actualiza el LLM y el agente desde código |
+| Agente Sofía (inbound) | ✅ `agent_f59dfb66edca38e467eac0b003` · LLM `llm_089a90cd550f162214e1646cf24d` |
+| URL pública | `https://contacto-66951--agente-voz-ghl-fastapi-app.modal.run` |
+| Twilio ↔ Retell | ⬜ **no conectado** — el número aún no enruta al agente |
+| Worker outbound | ⬜ no construido (paso 6) |
+| Dashboard | ⬜ no construido (paso 7) |
+
+**Verificado en llamadas reales:** califica, consulta la agenda, agenda la cita,
+crea contacto y oportunidad en GHL, y escribe resumen + 3 scores + tag de
+temperatura tras colgar.
+
+### Dos fallos silenciosos que costaron caro — no repetirlos
+
+1. **GHL descarta `{key, field_value}` en custom fields.** Responde 200/201 y no
+   escribe nada. La forma que persiste es `{id, value}`, resolviendo el id desde
+   la Location. Afectaba también a `upsert_contact`, así que `/create-lead`
+   estuvo descartando el `reason` sin que nada lo indicara.
+2. **`prompts/` no viajaba a la imagen de Modal.** El análisis post-llamada lo
+   lee en cada `call_ended`; en producción habría reventado sin dejar rastro,
+   porque el webhook responde 200 por diseño para que Retell no reintente.
+
+La lección común: **un 2xx no es evidencia de que algo pasó.** Ambos salieron
+solo por leer el recurso de vuelta. Y la variante de prompt: **la agenda manda,
+no la instrucción** — Sofía ofrecía las 8:00 pese a la regla del prompt, porque
+el backend se las entregaba como disponibles.
+
+### Siguiente paso natural
+
+Conectar el número de Twilio al agente por Elastic SIP Trunk, para pasar de
+llamadas web de prueba a llamadas telefónicas reales.
