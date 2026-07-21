@@ -24,6 +24,21 @@ import re
 from pathlib import Path
 from typing import Any
 
+# Import the resource modules eagerly, at module load, on one thread.
+#
+# The SDK exposes `client.call`, `client.llm` and `client.agent` as lazy
+# properties that import their module on first access. The dashboard loads its
+# sections concurrently, so two worker threads hit two different first accesses
+# at the same moment and deadlock on Python's import lock — the page then
+# reports Retell as unavailable, which is a lie: Retell was fine, we never
+# asked it anything.
+#
+# Doing the imports here means every lazy path is already resolved before any
+# thread starts. Sequential tests never reproduce this; the first real page load
+# does.
+import retell.resources.agent  # noqa: F401  (import for its side effect)
+import retell.resources.call  # noqa: F401
+import retell.resources.llm  # noqa: F401
 import yaml
 from retell import Retell
 
@@ -736,6 +751,229 @@ def provision_inbound(*, persist: bool = True) -> dict[str, Any]:
         _upsert_env_var("RETELL_INBOUND_AGENT_ID", agent["agent_id"])
 
     return {**agent, "model": llm["model"], "temperature": llm["temperature"], "tools": llm["tools"]}
+
+
+# --------------------------------------------------------------------------
+# Read side — what the dashboard asks Retell
+#
+# Retell owns the call history: durations, transcripts, which tools fired, and
+# the prompt that is actually live. None of it is mirrored anywhere, so these
+# are the only way to see what Sofía did.
+# --------------------------------------------------------------------------
+
+
+def _inbound_agent_id() -> str:
+    return _require_env("RETELL_INBOUND_AGENT_ID", "Run provision_inbound() first.")
+
+
+def _inbound_llm_id() -> str:
+    return _require_env("RETELL_INBOUND_LLM_ID", "Run provision_inbound() first.")
+
+
+def _as_dict(obj: Any) -> dict[str, Any]:
+    """Normalize an SDK model into a plain dict the rest of the code can read."""
+    if isinstance(obj, dict):
+        return obj
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        return dump()
+    return dict(obj) if hasattr(obj, "keys") else {"value": obj}
+
+
+def _filter_criteria(
+    *,
+    agent_id: str | None = None,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    tool_name: str | None = None,
+    tool_success: bool | None = None,
+) -> dict[str, Any]:
+    """Build one Retell filter. Always scoped to a single agent.
+
+    A Retell account can host agents for several businesses, so an unscoped
+    query would show one clinic another clinic's patients.
+    """
+    criteria: dict[str, Any] = {"agent": [{"agent_id": agent_id or _inbound_agent_id()}]}
+
+    if start_ms is not None and end_ms is not None:
+        criteria["start_timestamp"] = {"type": "range", "op": "bt", "value": [start_ms, end_ms]}
+
+    if tool_name:
+        tool_filter: dict[str, Any] = {"name": tool_name}
+        if tool_success is not None:
+            tool_filter["success"] = {"op": "eq", "type": "boolean", "value": tool_success}
+        criteria["tool_calls"] = [tool_filter]
+
+    return criteria
+
+
+def _items_of(response: Any) -> list[Any]:
+    """Read the rows out of a CallListResponse.
+
+    The SDK returns an object with `.items`, not a bare list. Reading it wrongly
+    does not raise — it yields nothing, and "nothing" is indistinguishable from
+    "this clinic had no calls". That is exactly the false zero this project
+    refuses to display, so an unrecognised shape is an error, never an empty
+    list.
+    """
+    rows = getattr(response, "items", None)
+    if rows is not None:
+        return list(rows)
+    if isinstance(response, list):
+        return response
+    raise RetellServiceError(
+        f"Unexpected shape from Retell call.list: {type(response).__name__}. "
+        "Expected `.items`. Refusing to report zero calls without knowing it is true."
+    )
+
+
+def list_calls_page(
+    *,
+    limit: int = 50,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    agent_id: str | None = None,
+    pagination_key: str | None = None,
+    tool_name: str | None = None,
+    tool_success: bool | None = None,
+) -> dict[str, Any]:
+    """One page of calls, newest first, with the cursor for the next one.
+
+    NOTE: list rows are a light payload — no transcript, no
+    `transcript_with_tool_calls`. Anything that depends on what happened inside
+    the call has to fetch it with `get_call`.
+    """
+    kwargs: dict[str, Any] = {
+        "filter_criteria": _filter_criteria(
+            agent_id=agent_id,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            tool_name=tool_name,
+            tool_success=tool_success,
+        ),
+        "limit": limit,
+        "sort_order": "descending",
+    }
+    if pagination_key:
+        kwargs["pagination_key"] = pagination_key
+
+    response = _client().call.list(**kwargs)
+    return {
+        "calls": [_as_dict(row) for row in _items_of(response)],
+        "has_more": bool(getattr(response, "has_more", False)),
+        "pagination_key": getattr(response, "pagination_key", None),
+    }
+
+
+def list_calls(**kwargs: Any) -> list[dict[str, Any]]:
+    """One page of calls as a plain list, for callers that do not paginate."""
+    return list_calls_page(**kwargs)["calls"]
+
+
+def count_calls(
+    *,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    agent_id: str | None = None,
+    tool_name: str | None = None,
+    tool_success: bool | None = None,
+) -> int:
+    """Exact number of matching calls, counted by Retell rather than by us.
+
+    Counting the length of a page would silently cap at the page size: a clinic
+    with 300 calls would be told it had 100. `include_total` makes Retell do the
+    counting, so the headline number stays true as volume grows.
+    """
+    response = _client().call.list(
+        limit=1,
+        include_total=True,
+        filter_criteria=_filter_criteria(
+            agent_id=agent_id,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            tool_name=tool_name,
+            tool_success=tool_success,
+        ),
+    )
+    total = getattr(response, "total", None)
+    if total is None:
+        raise RetellServiceError(
+            "Retell did not return a total for this query. Refusing to guess a count "
+            "that the clinic will read as fact."
+        )
+    return int(total)
+
+
+def get_call(call_id: str) -> dict[str, Any]:
+    """One call in full: transcript, tool calls, timings, cost."""
+    if not call_id:
+        raise RetellServiceError("call_id is required")
+    return _as_dict(_client().call.retrieve(call_id))
+
+
+def get_llm(llm_id: str | None = None) -> dict[str, Any]:
+    """The live LLM object, including the prompt actually being spoken."""
+    return _as_dict(_client().llm.retrieve(llm_id or _inbound_llm_id()))
+
+
+def get_live_prompt(llm_id: str | None = None) -> str:
+    """The prompt Retell is running right now — the source of truth in production."""
+    llm = get_llm(llm_id)
+    prompt = llm.get("general_prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise RetellServiceError("The live Retell LLM has no general_prompt set")
+    return prompt
+
+
+def set_live_prompt(prompt: str, *, llm_id: str | None = None) -> dict[str, Any]:
+    """Publish a prompt to Retell. Tools and begin_message are left untouched.
+
+    Only `general_prompt` is sent. Re-sending the tool definitions here would
+    let a prompt edit silently rewrite the tool wiring, and the tools point at
+    the Modal backend — that is provisioning, not content, and it belongs to
+    `update_inbound_llm`.
+    """
+    if not prompt or not prompt.strip():
+        raise RetellServiceError("Refusing to publish an empty prompt")
+
+    target = llm_id or _inbound_llm_id()
+    llm = _client().llm.update(target, general_prompt=prompt)
+    LOG.info("Published prompt to Retell LLM %s (%s chars)", target, len(prompt))
+    return {"llm_id": getattr(llm, "llm_id", target), "prompt_chars": len(prompt)}
+
+
+def start_outbound_call(to_number: str, *, from_number: str | None = None) -> dict[str, Any]:
+    """Place a call from the clinic's number to a patient. E.164 on both ends."""
+    origin = from_number or _require_env("TWILIO_PHONE_NUMBER", "The clinic's number, in E.164.")
+    agent_id = (os.environ.get("RETELL_OUTBOUND_AGENT_ID") or "").strip() or _inbound_agent_id()
+
+    call = _client().call.create_phone_call(
+        from_number=origin,
+        to_number=to_number,
+        override_agent_id=agent_id,
+    )
+    result = _as_dict(call)
+    LOG.info("Outbound call started: %s -> %s (call_id=%s)", origin, to_number, result.get("call_id"))
+    return {
+        "call_id": result.get("call_id"),
+        "agent_id": agent_id,
+        "from_number": origin,
+        "to_number": to_number,
+        "call_status": result.get("call_status"),
+    }
+
+
+def test_connection() -> dict[str, Any]:
+    """Can we reach Retell with these credentials, and is the agent still there?"""
+    agent_id = _inbound_agent_id()
+    agent = _as_dict(_client().agent.retrieve(agent_id))
+    return {
+        "ok": True,
+        "agent_id": agent_id,
+        "agent_name": agent.get("agent_name"),
+        "voice_id": agent.get("voice_id"),
+        "language": agent.get("language"),
+    }
 
 
 if __name__ == "__main__":

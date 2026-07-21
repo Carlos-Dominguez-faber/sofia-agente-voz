@@ -31,8 +31,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
+from app.auth import allowed_origins
+from app.dashboard_api import router as dashboard_router
 from app.services import anthropic_service
 from app.services import ghl_service as ghl
+from app.services.call_parsing import phone_from_tool_calls, transcript_from
 from app.services.ghl_service import (
     GHLAPIError,
     GHLBookingError,
@@ -235,6 +238,26 @@ web_app = FastAPI(
     description="Tools que Retell llama en vivo. GoHighLevel es la única fuente de la verdad.",
     version="0.1.0",
 )
+
+# The dashboard's read endpoints, under /dashboard and behind the shared token.
+# They live in their own module so nothing added for the panel can reach the
+# action endpoints Retell depends on mid-call.
+web_app.include_router(dashboard_router)
+
+# CORS stays closed unless an origin is named explicitly. The panel proxies
+# through its own server, so the browser never calls this API cross-origin and
+# the default of "no origins" is the correct one for a normal deployment.
+_origins = allowed_origins()
+if _origins:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+    LOG.info("CORS enabled for %s", _origins)
 
 
 @web_app.exception_handler(GHLError)
@@ -595,47 +618,9 @@ async def update_lead_status(payload: UpdateLeadStatusRequest) -> JSONResponse:
 # ==========================================================================
 
 
-def _transcript_from(call: Mapping[str, Any]) -> str:
-    """Retell ships the transcript as a plain string; fall back to the object form."""
-    transcript = call.get("transcript")
-    if isinstance(transcript, str) and transcript.strip():
-        return transcript
-
-    turns = call.get("transcript_object") or []
-    lines = [
-        f"{turn.get('role', '?')}: {turn.get('content', '')}"
-        for turn in turns
-        if isinstance(turn, Mapping) and turn.get("content")
-    ]
-    return "\n".join(lines)
-
-
-def _phone_from_tool_calls(call: Mapping[str, Any]) -> str | None:
-    """Recover the patient's phone from the tool calls Sofía made during the call.
-
-    The backend keeps no call_id -> contact_id map — GHL is the source of truth,
-    not us. But the phone Sofía passed to create_lead / book_appointment is right
-    there in the transcript payload, and upsert_contact is idempotent by phone,
-    so it resolves back to the same contact without any local state.
-    """
-    for entry in call.get("transcript_with_tool_calls") or []:
-        if not isinstance(entry, Mapping) or entry.get("role") != "tool_call_invocation":
-            continue
-        if entry.get("name") not in {"create_lead", "book_appointment"}:
-            continue
-        raw_args = entry.get("arguments")
-        try:
-            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-        except json.JSONDecodeError:
-            continue
-        if isinstance(args, Mapping) and args.get("phone"):
-            return str(args["phone"])
-    return None
-
-
 def _resolve_contact_id(call: Mapping[str, Any]) -> str | None:
     """Find the GHL contact this call belongs to, without any local state."""
-    phone = _phone_from_tool_calls(call) or call.get("from_number")
+    phone = phone_from_tool_calls(call) or call.get("from_number")
     if not phone:
         return None
     try:
@@ -652,7 +637,7 @@ def process_call_ended(call: Mapping[str, Any]) -> None:
     its 200, and a broken analysis must never take down the webhook.
     """
     call_id = call.get("call_id")
-    transcript = _transcript_from(call)
+    transcript = transcript_from(call)
 
     if not transcript.strip():
         LOG.warning("call_ended call=%s had no transcript; nothing to analyze", call_id)
@@ -860,10 +845,12 @@ if modal is not None:
         # sofia.config.yaml must travel with the code: ghl_service resolves it
         # relative to the package root, which is /root inside the image.
         .add_local_file("sofia.config.yaml", "/root/sofia.config.yaml")
-        # prompts/ must travel too: the post-call analysis reads
-        # prompts/<industry>.yaml on every call_ended. Without this the analysis
-        # raises inside the webhook and fails silently (the webhook always
-        # answers 200 by design, so Retell never retries and nothing surfaces).
+        # prompts/ must travel too. Two consumers depend on it: the post-call
+        # analysis reads prompts/<industry>.yaml on every call_ended, and the
+        # dashboard reads the safety guardrails from it on every prompt save.
+        # Without this the image has the code but not the text it operates on —
+        # and the failure hides, because the webhook answers 200 by design, so
+        # Retell never retries and the raised error only lands in a log.
         .add_local_dir("prompts", "/root/prompts")
         .add_local_python_source("app")
     )

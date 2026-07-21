@@ -81,13 +81,13 @@ Modal Cron (cada hora) ─▶ lee leads pendientes y no-shows en GHL
 
 ## 3. El stack y el rol exacto de cada pieza
 
-| Pieza | Rol exacto |
-|-------|-----------|
-| **Retell AI** | **La voz y los oídos.** STT + TTS en tiempo real y la orquestación del turno de conversación. Aquí viven los dos agentes (Sofía inbound y Sofía outbound) y sus custom tools apuntando a Modal. |
-| **Twilio** | **El número.** Recibe y hace las llamadas. Se conecta a Retell por **Elastic SIP Trunk**. Nada de lógica de negocio vive aquí. |
-| **Claude** | **El cerebro.** Razona en llamada (qué responder, qué tool usar) y hace el **análisis post-llamada**: lee la transcripción y devuelve resumen + score estructurado que se escribe en GHL. |
-| **Modal** | **La cocina.** El backend Python/FastAPI donde viven y se ejecutan las tools, 24/7, con URL pública. También hospeda el worker Cron de outbound. |
-| **GoHighLevel** | **El valor guardado.** CRM + calendario + pipeline en una sola Location: contacto, cita y avance del paciente. Fuente única de la verdad. |
+| Pieza           | Rol exacto                                                                                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Retell AI**   | **La voz y los oídos.** STT + TTS en tiempo real y la orquestación del turno de conversación. Aquí viven los dos agentes (Sofía inbound y Sofía outbound) y sus custom tools apuntando a Modal. |
+| **Twilio**      | **El número.** Recibe y hace las llamadas. Se conecta a Retell por **Elastic SIP Trunk**. Nada de lógica de negocio vive aquí.                                                                  |
+| **Claude**      | **El cerebro.** Razona en llamada (qué responder, qué tool usar) y hace el **análisis post-llamada**: lee la transcripción y devuelve resumen + score estructurado que se escribe en GHL.       |
+| **Modal**       | **La cocina.** El backend Python/FastAPI donde viven y se ejecutan las tools, 24/7, con URL pública. También hospeda el worker Cron de outbound.                                                |
+| **GoHighLevel** | **El valor guardado.** CRM + calendario + pipeline en una sola Location: contacto, cita y avance del paciente. Fuente única de la verdad.                                                       |
 
 > **Nota sobre el LLM en llamada.** Dentro de Retell usamos **Claude Haiku · temperature
 > 0.3–0.4**. Haiku es el modelo rápido de Anthropic: en voz mandan la **latencia** y el
@@ -112,12 +112,12 @@ Modal Cron (cada hora) ─▶ lee leads pendientes y no-shows en GHL
 
 Dos archivos, dos naturalezas distintas. **No mezclar.**
 
-| | `sofia.config.yaml` | `.env` |
-|---|---|---|
-| **Qué guarda** | Datos del negocio: nombre, industria, timezone, nombre del agente, `voice_id`, horarios, outbound activo, y el bloque `crm` con el mapeo a GHL (custom field keys, `calendar_id`, `pipeline_id`, `stage_id`). | Secretos: API keys y tokens. |
-| **Se versiona** | **Sí.** Es parte del repo — describe el negocio, no da acceso a nada. | **No.** Va en `.gitignore`. |
-| **Se comparte** | Sí, precargado con "Sonrisa Perfecta". | Nunca. Se versiona solo `.env.example`, **vacío**, para que se sepa qué credenciales hacen falta. |
-| **Se edita con** | `/customize` o a mano. | `/setup` (entrevista) o a mano. |
+|                  | `sofia.config.yaml`                                                                                                                                                                                           | `.env`                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Qué guarda**   | Datos del negocio: nombre, industria, timezone, nombre del agente, `voice_id`, horarios, outbound activo, y el bloque `crm` con el mapeo a GHL (custom field keys, `calendar_id`, `pipeline_id`, `stage_id`). | Secretos: API keys y tokens.                                                                      |
+| **Se versiona**  | **Sí.** Es parte del repo — describe el negocio, no da acceso a nada.                                                                                                                                         | **No.** Va en `.gitignore`.                                                                       |
+| **Se comparte**  | Sí, precargado con "Sonrisa Perfecta".                                                                                                                                                                        | Nunca. Se versiona solo `.env.example`, **vacío**, para que se sepa qué credenciales hacen falta. |
+| **Se edita con** | `/customize` o a mano.                                                                                                                                                                                        | `/setup` (entrevista) o a mano.                                                                   |
 
 Regla dura: **si un valor identifica al negocio, va al YAML; si da acceso a un servicio, va al
 `.env`.** Nunca hardcodear credenciales en el código.
@@ -154,9 +154,11 @@ ANTHROPIC_API_KEY=
 ```
 
 > **Modal NO va en `.env`.** Se autentica por CLI, una sola vez:
+>
 > ```bash
 > modal token new
 > ```
+>
 > Después de eso, `modal deploy` funciona. No busques ni pidas un `MODAL_TOKEN` —
 > no existe en este proyecto. Los secretos que el backend necesita en runtime se cargan en
 > el Modal Secret `agente-voz-credentials`.
@@ -219,19 +221,24 @@ Global Timing & Pacing Rules · Safety & Scope Guardrails · Objection Handling.
 
 ---
 
-## 8. Dashboard — MÁS ADELANTE, todavía no se construye
+## 8. Dashboard — en construcción (rama `dashboard`)
 
-Está planeado un **dashboard ligero en Next.js** para el cliente. **No lo construimos ahora**,
-pero condiciona cómo estructuramos el backend desde hoy.
+Un **dashboard ligero en Next.js** para el cliente. Se construye por fases: primero los
+endpoints de lectura en `app/`, después el panel, al final la documentación de entrega.
 
 Lo importante: **el dashboard NO tiene base de datos propia.** Solo **LEE** de dos fuentes —
 **GoHighLevel** (métricas, contactos, citas, funnel) y **el backend en Modal** (llamadas,
 transcripciones, estado de servicios).
 
-Qué mostrará: métricas (llamadas totales, citas agendadas, tasa de éxito, duración promedio,
-costos), llamadas recientes con transcripción y resumen, temperatura de leads y funnel,
+Qué mostrará: métricas (llamadas totales, citas agendadas por Sofía, tasa de éxito, duración
+promedio), llamadas recientes con transcripción y resumen, temperatura de leads y funnel,
 edición del prompt del agente sin entrar a Retell, disparo de una llamada outbound manual y
 branding por cliente.
+
+> **Costos, no.** Se consideraron y quedaron fuera. Retell expone su costo por llamada, pero
+> Twilio y Anthropic se facturan aparte y nadie los agrega hoy: una tarjeta de "costos" que
+> suma solo una de las tres fuentes miente por omisión, y el dueño de la clínica la leería
+> como el costo total de operar a Sofía. Cuando exista una fuente que sume las tres, entra.
 
 > El "sin entrar a Retell" es el argumento de negocio: es lo que sostiene el
 > **mantenimiento mensual**.
@@ -242,21 +249,23 @@ branding por cliente.
   Retell.
 - La lógica de negocio vive en `app/services/`, **no** en los handlers — para que el
   dashboard pueda reusarla sin duplicar.
-- Prever endpoints de **lectura** (métricas, listado de llamadas, estado de servicios) además
-  de los de acción.
+- Los endpoints de **lectura** viven en `app/dashboard_api.py`, bajo `/dashboard` y detrás de
+  un token compartido. Los de acción no se tocan: Retell depende de ellos en vivo.
 - No introducir estado local que el dashboard tendría que sincronizar. **GHL sigue siendo la
-  fuente de la verdad.**
+  fuente de la verdad.** Hay **una sola excepción deliberada**, `app/services/prompt_history.py`:
+  guarda la versión previa del prompt para poder revertir en un clic si un cliente borra los
+  guardrails médicos. No es dato del CRM y el razonamiento está en el BLUEPRINT.
 
 ---
 
 ## 9. Skills previstas
 
-| Comando | Qué hace |
-|---------|----------|
-| `/setup` | Entrevista interactiva (para no-devs) → llena `sofia.config.yaml`, pide credenciales, **valida cada API en vivo**, crea los agentes de Retell, conecta Twilio, referencia calendario y pipeline de GHL, despliega a Modal. Admite `--skip-interview`. |
-| `/test` | Verifica 5 servicios: Retell · Twilio · GHL · Backend (health de Modal) · Anthropic. Los errores **siempre** vienen con la solución, nunca con un código crudo. |
-| `/customize` | Ajusta prompt, campos y tags de GHL, horario de outbound, datos del negocio o voz — sin romper pacing ni guardrails. |
-| `/status` | Estado en vivo de todos los servicios y la última llamada. |
+| Comando      | Qué hace                                                                                                                                                                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/setup`     | Entrevista interactiva (para no-devs) → llena `sofia.config.yaml`, pide credenciales, **valida cada API en vivo**, crea los agentes de Retell, conecta Twilio, referencia calendario y pipeline de GHL, despliega a Modal. Admite `--skip-interview`. |
+| `/test`      | Verifica 5 servicios: Retell · Twilio · GHL · Backend (health de Modal) · Anthropic. Los errores **siempre** vienen con la solución, nunca con un código crudo.                                                                                       |
+| `/customize` | Ajusta prompt, campos y tags de GHL, horario de outbound, datos del negocio o voz — sin romper pacing ni guardrails.                                                                                                                                  |
+| `/status`    | Estado en vivo de todos los servicios y la última llamada.                                                                                                                                                                                            |
 
 ---
 

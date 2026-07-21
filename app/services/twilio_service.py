@@ -515,6 +515,38 @@ def connect_number_to_retell(
     }
 
 
+def test_connection() -> dict[str, Any]:
+    """A cheap liveness check for the dashboard's /services/status.
+
+    `verify_connection` above reads the whole SIP wiring — trunk, origination,
+    ACLs, the Retell import — which is the right thing when installing a number
+    but far too heavy to run on every status refresh in the panel. This answers
+    only the two questions the status card needs: are the credentials valid, and
+    is the clinic's number still on the account? A number that quietly left the
+    account is a phone that rings nowhere, invisible until a patient complains.
+    """
+    account_sid = _require_env("TWILIO_ACCOUNT_SID", "Find it on the Twilio console dashboard.")
+    configured_number = (os.environ.get("TWILIO_PHONE_NUMBER") or "").strip()
+
+    client = _client()
+    try:
+        account = client.api.accounts(account_sid).fetch()
+        numbers = client.incoming_phone_numbers.list(limit=20)
+    except Exception as exc:  # noqa: BLE001 - the SDK raises a wide range of errors
+        raise TwilioServiceError(f"Twilio rejected the request: {exc}") from exc
+
+    owned = [n.phone_number for n in numbers]
+    return {
+        "ok": True,
+        "account_status": account.status,
+        "phone_number": configured_number or None,
+        # False means the clinic's line is not on this account: it would ring
+        # nowhere and no error would surface on its own.
+        "number_on_account": configured_number in owned if configured_number else None,
+        "numbers_on_account": len(owned),
+    }
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
     result = connect_number_to_retell()

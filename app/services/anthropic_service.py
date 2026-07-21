@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import anthropic
 import yaml
@@ -94,6 +94,21 @@ def _client() -> anthropic.Anthropic:
     if not api_key:
         raise AnalysisError("ANTHROPIC_API_KEY is not set")
     return anthropic.Anthropic(api_key=api_key)
+
+
+def test_connection() -> dict[str, Any]:
+    """Can we reach the API with this key? Used by /services/status.
+
+    Deliberately the cheapest possible round trip — one token, no transcript.
+    A status check that ran a real analysis would cost money every time somebody
+    refreshed the dashboard.
+    """
+    response = _client().messages.create(
+        model=MODEL,
+        max_tokens=1,
+        messages=[{"role": "user", "content": "ping"}],
+    )
+    return {"ok": True, "model": MODEL, "stop_reason": response.stop_reason}
 
 
 def load_analysis_prompt(industry: str | None = None) -> str:
