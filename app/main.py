@@ -439,15 +439,23 @@ async def book_appointment(payload: BookAppointmentRequest) -> JSONResponse:
     if payload.reason and reason_key:
         custom_fields[reason_key] = payload.reason
 
-    tags = [payload.temperature] if payload.temperature else None
+    # The temperature tag is NOT passed to upsert_contact: that write is additive
+    # and would stack on top of whatever tag is already there. It goes through
+    # set_temperature_tag below, once the contact exists.
     contact = ghl.upsert_contact(
         phone=payload.phone,
         first_name=payload.first_name,
         last_name=payload.last_name,
         email=payload.email,
-        tags=tags,
         custom_fields=custom_fields or None,
     )
+
+    if payload.temperature:
+        try:
+            ghl.set_temperature_tag(contact["id"], payload.temperature)
+        except (ghl.GHLError, ValueError) as exc:
+            # A wrong tag must never cost the patient the appointment.
+            LOG.warning("Could not set temperature on contact %s: %s", contact["id"], exc)
 
     # --- Step 2: the appointment. This is the promise. It either lands or we say so. ---
     duration = payload.duration_minutes or ghl.DEFAULT_APPOINTMENT_MINUTES
@@ -533,7 +541,8 @@ async def update_lead_status(payload: UpdateLeadStatusRequest) -> JSONResponse:
                 detail=f"temperature must be one of {allowed}, got `{payload.temperature}`",
                 message="No reconocí esa temperatura de lead.",
             )
-        applied_tags = ghl.add_tags(contact_id, [payload.temperature])["tags"]
+        # Replaces the sibling temperature tags instead of stacking on them.
+        applied_tags = ghl.set_temperature_tag(contact_id, payload.temperature)["tags"]
 
     # Resolve the stage from the config map so handlers never carry GHL ids.
     stage_id = payload.stage_id
@@ -700,9 +709,11 @@ def process_call_ended(call: Mapping[str, Any]) -> None:
             LOG.error("Could not write custom fields for call=%s: %s", call_id, exc)
 
     # --- The temperature tag. ---
+    # This runs last of the three writers and reads the whole transcript, so its
+    # verdict replaces the preliminary one the agent set during the call.
     if analysis.temperatura:
         try:
-            ghl.add_tags(contact_id, [analysis.temperatura])
+            ghl.set_temperature_tag(contact_id, analysis.temperatura)
         except (ghl.GHLError, ValueError) as exc:
             LOG.error("Could not tag contact for call=%s: %s", call_id, exc)
 

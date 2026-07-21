@@ -17,7 +17,7 @@ business:
   website: "clinicasonrisaperfecta.site"
   timezone: "America/Cancun"        # UTC-5 year-round, NO DST — see note below
   country: MX
-  locale: "es-MX"
+  locale: "es-419"        # es-MX NO es un idioma válido en Retell (verificado en cámara, V06)
   # RESUELTO: el horario declarado ahora coincide con la agenda real.
   # El calendario "Limpieza Dental" de GHL devuelve slots de 08:00 a 16:30
   # (última cita 16:30 + 30 min = cierre 17:00), de lunes a viernes.
@@ -47,9 +47,10 @@ agent:
 
   voice:
     provider: elevenlabs
-    language: "es-MX"
+    language: "es-419"     # Retell solo acepta es-ES y es-419; México cae en es-419
     style: "cálido"
-    voice_id: PENDIENTE_VOICE_ID     # ElevenLabs es-MX — falta elegirla
+    voice_id: "retell-Andrea"        # voz de plataforma de Retell, acento mexicano, femenina
+                                     # OJO: el agente se llama Sofía; Andrea es el nombre de la VOZ
     speak_during_execution: true     # habla mientras consulta disponibilidad
 
   llm:
@@ -246,6 +247,34 @@ outbound:
     - no_shows        # stage "No Asistió"
     - leads_frescos
   goal: "Recalificar y reagendar"
-  # PENDIENTE: ventana horaria permitida para llamar.
-  # No se llama a un paciente a las 3 de la mañana porque el cron se despertó.
-  call_window: PENDIENTE_CONFIRMAR
+
+  # Ventana horaria permitida, en la timezone del negocio.
+  # El cron se despierta cada hora; esto es lo que evita que marque a las 3am.
+  call_window:
+    start_hour: 9        # inclusivo
+    end_hour: 19         # exclusivo — 19 significa "hasta las 18:59"
+    weekdays: [0, 1, 2, 3, 4, 5]   # lunes=0 ... domingo=6. Sin domingos.
+
+  # Tope por corrida. Con 200 no-shows en el pipeline NO queremos 200 llamadas
+  # en la primera vuelta: se drena de a poco, una corrida por hora.
+  max_calls_per_run: 10
+
+  # Horas de espera antes de volver a marcarle a la misma persona.
+  # Sin esto el cron le marca cada hora al mismo lead.
+  cooldown_hours: 24
+
+  # Cuántas veces se intenta antes de rendirse. Insistir más que esto no
+  # recupera al paciente, solo molesta.
+  max_attempts: 3
+
+  # Contactos con cualquiera de estos tags NUNCA se marcan.
+  # `demo-ficticio` protege los 20 contactos de prueba de esta Location:
+  # son números inventados y marcarles cuesta dinero sin recuperar a nadie.
+  exclude_tags:
+    - demo-ficticio
+    - no-llamar
+
+  # Dónde vive el estado del seguimiento. En GHL, no en el worker.
+  tracking_fields:
+    last_attempt: "contact.ultimo_intento_outbound"   # DATE · id UgyrgW8CXVLP0DGHXSma
+    attempts: "contact.intentos_outbound"             # NUMERICAL · id CReNx2QCrbtsl3zI5emN

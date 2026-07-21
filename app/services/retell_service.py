@@ -57,9 +57,24 @@ DEFAULT_VOICE_ID = "retell-Andrea"  # platform voice, Mexican, female
 # pace runs over the digits faster than anyone can verify their own data.
 DEFAULT_VOICE_SPEED = 0.9
 
-# Single-brace tokens like {business.name}. Retell's own dynamic variables use
-# double braces, so the two templating systems never collide.
-_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_]+(?:\.[a-zA-Z_]+)*)\}")
+# Retell never hangs up on its own. Without the `end_call` tool AND this timeout,
+# a call where the patient just says "gracias, adiós" and stops talking stays
+# open, billing minutes, until max_call_duration_ms fires.
+DEFAULT_END_CALL_AFTER_SILENCE_MS = 10_000
+
+# A reception call that books one appointment runs 3-5 minutes. Ten is the
+# ceiling for a genuinely messy call, not a target.
+DEFAULT_MAX_CALL_DURATION_MS = 600_000
+
+# Single-brace tokens like {business.name}, resolved from sofia.config.yaml at
+# provisioning time.
+#
+# The lookarounds matter: Retell's own dynamic variables are {{lead_name}}, and
+# without them this pattern happily matches the inner {lead_name} and blows up
+# with "placeholder with no value" — the per-call variables do not exist yet
+# when the agent is created. The two templating systems share a delimiter, so
+# they have to be told apart explicitly.
+_PLACEHOLDER_RE = re.compile(r"(?<!\{)\{([a-zA-Z_]+(?:\.[a-zA-Z_]+)*)\}(?!\})")
 
 _PENDING_PREFIX = "PENDIENTE"
 
@@ -224,10 +239,14 @@ def begin_message() -> str:
 
 
 def build_custom_functions(base_url: str | None = None) -> list[dict[str, Any]]:
-    """The three tools Sofía can call mid-call, wired to the Modal endpoints.
+    """The tools Sofía can call mid-call: four wired to Modal, plus `end_call`.
 
-    `speak_during_execution` is on for all three: a silent agent while an HTTP
-    call is in flight sounds like the line dropped.
+    `speak_during_execution` is on for the four custom ones: a silent agent
+    while an HTTP call is in flight sounds like the line dropped.
+
+    `end_call` is Retell's built-in and takes no URL — it is what lets Sofía
+    hang up. It pairs with `end_call_after_silence_ms` on the agent: the tool
+    covers a clean goodbye, the timeout covers a caller who just walks away.
     """
     url = (base_url or modal_url()).rstrip("/")
 
@@ -332,6 +351,53 @@ def build_custom_functions(base_url: str | None = None) -> list[dict[str, Any]]:
                 "required": ["phone", "start_time"],
             },
         },
+        {
+            "type": "custom",
+            "name": "update_lead_status",
+            "description": (
+                "Marca la temperatura del paciente y mueve su tarjeta en el pipeline. "
+                "Úsala cuando el paciente NO agenda pero sí muestra interés, o cuando "
+                "quieras registrar que quedó pendiente de decidir. Si ya agendaste con "
+                "book_appointment no la necesitas: esa ya deja la etapa correcta."
+            ),
+            "url": f"{url}/update-lead-status",
+            "speak_during_execution": True,
+            "speak_after_execution": False,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {"type": "string", "description": "Teléfono del paciente."},
+                    "temperature": {
+                        "type": "string",
+                        "enum": ["hot", "warm", "cold"],
+                        "description": (
+                            "hot si hay dolor o quiere agendar ya; warm si le interesa pero "
+                            "lo está pensando; cold si solo preguntaba."
+                        ),
+                    },
+                    "stage": {
+                        "type": "string",
+                        "enum": ["new_lead", "engagement"],
+                        "description": (
+                            "new_lead si apenas se registró; engagement si hubo interés real "
+                            "pero no cerró cita."
+                        ),
+                    },
+                },
+                "required": ["phone"],
+            },
+        },
+        {
+            # Built-in, no URL. Without this Sofía physically cannot hang up.
+            "type": "end_call",
+            "name": "end_call",
+            "description": (
+                "Cuelga la llamada. Úsala SOLO después de despedirte, cuando la "
+                "conversación ya terminó: la cita quedó confirmada, el paciente dijo que "
+                "no quiere nada más, o se despidió. Nunca cuelgues a media frase ni antes "
+                "de confirmar lo que quedó agendado."
+            ),
+        },
     ]
 
 
@@ -346,7 +412,7 @@ def create_inbound_llm(
     temperature: float = DEFAULT_TEMPERATURE,
     base_url: str | None = None,
 ) -> dict[str, Any]:
-    """Creates the brain: model, temperature, prompt and the three tools."""
+    """Creates the brain: model, temperature, prompt and the tools."""
     prompt = load_prompt("inbound_prompt")
     tools = build_custom_functions(base_url)
 
@@ -368,6 +434,7 @@ def create_inbound_agent(
     agent_name: str | None = None,
     voice_id: str = DEFAULT_VOICE_ID,
     language: str = LANGUAGE_LATAM_SPANISH,
+    voice_speed: float = DEFAULT_VOICE_SPEED,
     base_url: str | None = None,
 ) -> dict[str, Any]:
     """Mounts the voice and the phone number's behaviour on top of that brain."""
@@ -378,17 +445,23 @@ def create_inbound_agent(
         response_engine={"type": "retell-llm", "llm_id": llm_id},
         agent_name=name,
         voice_id=voice_id,
+        voice_speed=voice_speed,
         language=language,
         webhook_url=f"{url}/retell-webhook",
+        end_call_after_silence_ms=DEFAULT_END_CALL_AFTER_SILENCE_MS,
+        max_call_duration_ms=DEFAULT_MAX_CALL_DURATION_MS,
     )
     LOG.info("Retell agent created: %s (%s, voice=%s)", agent.agent_id, name, voice_id)
     return {
         "agent_id": agent.agent_id,
         "agent_name": name,
         "voice_id": voice_id,
+        "voice_speed": voice_speed,
         "language": language,
         "llm_id": llm_id,
         "webhook_url": f"{url}/retell-webhook",
+        "end_call_after_silence_ms": DEFAULT_END_CALL_AFTER_SILENCE_MS,
+        "max_call_duration_ms": DEFAULT_MAX_CALL_DURATION_MS,
     }
 
 
@@ -396,14 +469,32 @@ def update_inbound_agent(
     agent_id: str | None = None,
     *,
     voice_speed: float = DEFAULT_VOICE_SPEED,
+    end_call_after_silence_ms: int = DEFAULT_END_CALL_AFTER_SILENCE_MS,
+    max_call_duration_ms: int = DEFAULT_MAX_CALL_DURATION_MS,
 ) -> dict[str, Any]:
-    """Adjusts the voice on the existing agent without recreating it."""
+    """Adjusts voice and call-termination settings without recreating the agent."""
     target = agent_id or _require_env(
         "RETELL_INBOUND_AGENT_ID", "Run provision_inbound() first, or pass agent_id."
     )
-    agent = _client().agent.update(target, voice_speed=voice_speed)
-    LOG.info("Retell agent %s updated (voice_speed=%s)", target, voice_speed)
-    return {"agent_id": agent.agent_id, "voice_speed": voice_speed}
+    agent = _client().agent.update(
+        target,
+        voice_speed=voice_speed,
+        end_call_after_silence_ms=end_call_after_silence_ms,
+        max_call_duration_ms=max_call_duration_ms,
+    )
+    LOG.info(
+        "Retell agent %s updated (voice_speed=%s, silence=%sms, max=%sms)",
+        target,
+        voice_speed,
+        end_call_after_silence_ms,
+        max_call_duration_ms,
+    )
+    return {
+        "agent_id": agent.agent_id,
+        "voice_speed": voice_speed,
+        "end_call_after_silence_ms": end_call_after_silence_ms,
+        "max_call_duration_ms": max_call_duration_ms,
+    }
 
 
 def update_inbound_llm(llm_id: str | None = None, *, base_url: str | None = None) -> dict[str, Any]:
@@ -426,6 +517,185 @@ def update_inbound_llm(llm_id: str | None = None, *, base_url: str | None = None
     )
     LOG.info("Retell LLM %s updated (prompt=%s chars, tools=%s)", target, len(prompt), len(tools))
     return {"llm_id": llm.llm_id, "prompt_chars": len(prompt), "tools": [t["name"] for t in tools]}
+
+
+# --------------------------------------------------------------------------
+# Outbound — Sofía calls the patient
+# --------------------------------------------------------------------------
+
+# The dynamic variables the outbound prompt expects. The worker fills these on
+# every call; they are declared here so provisioning can check the prompt and
+# the caller agree, instead of finding out when Sofía says "Hola {{lead_name}}"
+# out loud to a real patient.
+OUTBOUND_DYNAMIC_VARIABLES = (
+    "lead_name",
+    "lead_last_name",
+    "lead_interest",
+    "lead_last_contact",
+    "lead_notes",
+    # The CRM already knows these. They are injected so Sofía can confirm them
+    # instead of asking — a callback that asks for the number it just dialled
+    # tells the patient there is nothing joined up behind the call.
+    "lead_phone",
+    "lead_email",
+    "contact_id",
+)
+
+# Outbound is a courtesy callback, not a consultation. The prompt says two
+# minutes; five is the ceiling before something has clearly gone wrong.
+OUTBOUND_MAX_CALL_DURATION_MS = 300_000
+
+
+def validate_outbound_variables(prompt: str) -> list[str]:
+    """Return the {{dynamic_variables}} in the prompt that the worker does not fill."""
+    found = set(re.findall(r"\{\{([a-zA-Z_]+)\}\}", prompt))
+    return sorted(found - set(OUTBOUND_DYNAMIC_VARIABLES))
+
+
+def create_outbound_llm(
+    *,
+    model: str = MODEL_HAIKU,
+    temperature: float = DEFAULT_TEMPERATURE,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    """The outbound brain. Same tools as inbound, different prompt and opening.
+
+    No `begin_message`: the first line has to name the patient, and that name
+    only exists at call time. Letting the model generate it from the prompt is
+    what makes {{lead_name}} resolve; a hardcoded greeting would not.
+    """
+    prompt = load_prompt("outbound_prompt")
+
+    unknown = validate_outbound_variables(prompt)
+    if unknown:
+        raise RetellServiceError(
+            f"The outbound prompt uses dynamic variables nobody fills: {unknown}. "
+            f"Add them to OUTBOUND_DYNAMIC_VARIABLES and to the worker, or remove them "
+            f"from prompts/*.yaml — Retell would say the raw {{{{placeholder}}}} out loud."
+        )
+
+    tools = build_custom_functions(base_url)
+    llm = _client().llm.create(
+        model=model,
+        model_temperature=temperature,
+        general_prompt=prompt,
+        general_tools=tools,
+        start_speaker="agent",  # we placed the call; we speak first
+    )
+    LOG.info("Outbound LLM created: %s (model=%s, tools=%s)", llm.llm_id, model, len(tools))
+    return {"llm_id": llm.llm_id, "model": model, "temperature": temperature, "tools": [t["name"] for t in tools]}
+
+
+def create_outbound_agent(
+    llm_id: str,
+    *,
+    agent_name: str | None = None,
+    voice_id: str = DEFAULT_VOICE_ID,
+    language: str = LANGUAGE_LATAM_SPANISH,
+    voice_speed: float = DEFAULT_VOICE_SPEED,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    """The outbound agent. Same voice as inbound — it is the same Sofía."""
+    url = (base_url or modal_url()).rstrip("/")
+    name = agent_name or f"{config_value('agent.name', 'Sofía')} outbound"
+
+    agent = _client().agent.create(
+        response_engine={"type": "retell-llm", "llm_id": llm_id},
+        agent_name=name,
+        voice_id=voice_id,
+        voice_speed=voice_speed,
+        language=language,
+        webhook_url=f"{url}/retell-webhook",
+        end_call_after_silence_ms=DEFAULT_END_CALL_AFTER_SILENCE_MS,
+        max_call_duration_ms=OUTBOUND_MAX_CALL_DURATION_MS,
+    )
+    LOG.info("Outbound agent created: %s (%s)", agent.agent_id, name)
+    return {
+        "agent_id": agent.agent_id,
+        "agent_name": name,
+        "voice_id": voice_id,
+        "language": language,
+        "llm_id": llm_id,
+        "webhook_url": f"{url}/retell-webhook",
+        "end_call_after_silence_ms": DEFAULT_END_CALL_AFTER_SILENCE_MS,
+        "max_call_duration_ms": OUTBOUND_MAX_CALL_DURATION_MS,
+    }
+
+
+def update_outbound_llm(
+    llm_id: str | None = None,
+    *,
+    base_url: str | None = None,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    """Push the current outbound prompt and tools onto the outbound LLM.
+
+    Retell refuses to modify a PUBLISHED LLM ("Cannot update published LLM"),
+    and offers no endpoint to branch a new version from one. So once the agent
+    has been published, the only way forward is to mint a fresh LLM and repoint
+    the agent at it. That path is taken automatically here, because the
+    alternative is an installer that works before publishing and 400s after.
+
+    Repointing leaves the agent on a NEW DRAFT version — it has to be published
+    again for callers to hear the change.
+    """
+    target = llm_id or _require_env(
+        "RETELL_OUTBOUND_LLM_ID", "Run provision_outbound() first, or pass llm_id."
+    )
+    prompt = load_prompt("outbound_prompt")
+
+    unknown = validate_outbound_variables(prompt)
+    if unknown:
+        raise RetellServiceError(f"The outbound prompt uses unfilled dynamic variables: {unknown}")
+
+    tools = build_custom_functions(base_url)
+    client = _client()
+
+    try:
+        llm = client.llm.update(target, general_prompt=prompt, general_tools=tools)
+        LOG.info("Outbound LLM %s updated in place (prompt=%s chars)", target, len(prompt))
+        return {
+            "llm_id": llm.llm_id,
+            "prompt_chars": len(prompt),
+            "tools": [t["name"] for t in tools],
+            "replaced": False,
+        }
+    except Exception as exc:
+        if "published" not in str(exc).lower():
+            raise
+
+    LOG.warning("Outbound LLM %s is published and immutable; creating a replacement", target)
+    replacement = create_outbound_llm(base_url=base_url)
+    new_llm_id = replacement["llm_id"]
+
+    agent = agent_id or _require_env("RETELL_OUTBOUND_AGENT_ID", "Provision the outbound agent first.")
+    client.agent.update(agent, response_engine={"type": "retell-llm", "llm_id": new_llm_id})
+    _upsert_env_var("RETELL_OUTBOUND_LLM_ID", new_llm_id)
+
+    LOG.info("Outbound agent %s repointed to new LLM %s", agent, new_llm_id)
+    return {
+        "llm_id": new_llm_id,
+        "previous_llm_id": target,
+        "prompt_chars": len(prompt),
+        "tools": [t["name"] for t in tools],
+        "replaced": True,
+        "needs_publish": True,
+    }
+
+
+def provision_outbound(*, persist: bool = True) -> dict[str, Any]:
+    """Create the outbound LLM and agent, and record both ids in .env."""
+    try:
+        llm = create_outbound_llm()
+        agent = create_outbound_agent(llm["llm_id"])
+    except GHLConfigError as exc:
+        raise RetellServiceError(str(exc)) from exc
+
+    if persist:
+        _upsert_env_var("RETELL_OUTBOUND_LLM_ID", llm["llm_id"])
+        _upsert_env_var("RETELL_OUTBOUND_AGENT_ID", agent["agent_id"])
+
+    return {**agent, "model": llm["model"], "temperature": llm["temperature"], "tools": llm["tools"]}
 
 
 def _upsert_env_var(key: str, value: str) -> None:

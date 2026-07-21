@@ -663,6 +663,58 @@ def add_tags(contact_id: str, tags: Sequence[str]) -> dict[str, Any]:
     return {"contact_id": contact_id, "tags": list(applied)}
 
 
+def remove_tags(contact_id: str, tags: Sequence[str]) -> dict[str, Any]:
+    """DELETE /contacts/{contactId}/tags — the counterpart of add_tags."""
+    if not contact_id:
+        raise ValueError("contact_id is required to untag a contact")
+    clean = [str(tag).strip() for tag in tags or [] if str(tag).strip()]
+    if not clean:
+        raise ValueError("at least one tag is required")
+
+    _request("DELETE", f"/contacts/{contact_id}/tags", json={"tags": clean})
+    LOG.info("Tags removed from contact %s: %s", contact_id, clean)
+    return {"contact_id": contact_id, "removed": clean}
+
+
+def get_contact(contact_id: str) -> dict[str, Any]:
+    """GET /contacts/{contactId} — reads the contact back, tags included."""
+    if not contact_id:
+        raise ValueError("contact_id is required")
+    body = _request("GET", f"/contacts/{contact_id}")
+    contact = body.get("contact") if isinstance(body, Mapping) else None
+    return dict(contact) if isinstance(contact, Mapping) else {}
+
+
+def set_temperature_tag(contact_id: str, temperature: str) -> dict[str, Any]:
+    """Makes `temperature` the ONLY temperature tag on the contact.
+
+    GHL tags are additive: POSTing "warm" over an existing "hot" leaves both on
+    the record. Three different writers set this tag — book_appointment,
+    /update-lead-status and the post-call analysis — so an additive write ends
+    with a contact tagged hot AND warm, and nobody in the clinic can tell which
+    one is current.
+
+    So this is the single entry point for temperature: it strips the sibling
+    values first, then applies the new one. Any other temperature tag on the
+    record is treated as stale by definition.
+    """
+    allowed = [str(t) for t in (_cfg("crm.tags.temperature", ["hot", "warm", "cold"]) or [])]
+    value = str(temperature).strip()
+    if value not in allowed:
+        raise ValueError(f"temperature must be one of {allowed}, got `{value}`")
+
+    # Only delete what is actually there — a blind DELETE per sibling would cost
+    # two extra API calls on every single call that books.
+    current = {str(t).strip() for t in (get_contact(contact_id).get("tags") or [])}
+    stale = [t for t in allowed if t != value and t in current]
+    if stale:
+        remove_tags(contact_id, stale)
+
+    applied = add_tags(contact_id, [value])["tags"]
+    LOG.info("Temperature set to %s on contact %s (removed %s)", value, contact_id, stale)
+    return {"contact_id": contact_id, "temperature": value, "removed": stale, "tags": applied}
+
+
 # Moves the patient's card along the pipeline as the relationship advances.
 def update_opportunity_stage(
     opportunity_id: str,
@@ -745,6 +797,77 @@ def update_contact_fields(contact_id: str, custom_fields: Mapping[str, Any]) -> 
     response = _request("PUT", f"/contacts/{contact_id}", json={"customFields": payload})
     LOG.info("Updated %s custom field(s) on contact %s", len(payload), contact_id)
     return {"contact_id": contact_id, "written": list(custom_fields), "raw": response}
+
+
+# ==========================================================================
+# Reads used by the outbound worker
+# ==========================================================================
+
+
+def search_opportunities(
+    *,
+    stage_id: str | None = None,
+    pipeline_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """GET /opportunities/search — the cards sitting in one pipeline stage.
+
+    The embedded `contact` carries name, phone and tags, which is the whole
+    reason the worker can build its queue without an extra fetch per lead.
+    """
+    params: dict[str, Any] = {
+        "location_id": _location_id(),
+        "pipeline_id": pipeline_id or _default_pipeline_id(),
+        "limit": max(1, min(int(limit), 100)),
+    }
+    if stage_id:
+        params["pipeline_stage_id"] = stage_id
+
+    body = _request("GET", "/opportunities/search", params=params, retry=True)
+    opportunities = body.get("opportunities") if isinstance(body, Mapping) else None
+    return list(opportunities or [])
+
+
+def get_contact_appointments(contact_id: str) -> list[dict[str, Any]]:
+    """GET /contacts/{contactId}/appointments — used to name the missed date out loud."""
+    if not contact_id:
+        raise ValueError("contact_id is required")
+    body = _request("GET", f"/contacts/{contact_id}/appointments", retry=True)
+    events = body.get("events") if isinstance(body, Mapping) else None
+    return list(events or [])
+
+
+def last_appointment_before(contact_id: str, moment: datetime | None = None) -> dict[str, Any] | None:
+    """The most recent appointment already in the past. None if there is none.
+
+    Errors are swallowed on purpose: a missing appointment date costs the
+    outbound call a nicety, not the call itself.
+    """
+    reference = moment or datetime.now(tz=_business_timezone())
+    try:
+        events = get_contact_appointments(contact_id)
+    except (GHLError, ValueError) as exc:
+        LOG.warning("Could not read appointments for %s: %s", contact_id, exc)
+        return None
+
+    past: list[tuple[datetime, dict[str, Any]]] = []
+    for event in events:
+        raw = event.get("startTime") or event.get("start_time")
+        if not raw:
+            continue
+        try:
+            start = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=_business_timezone())
+        if start < reference:
+            past.append((start, event))
+
+    if not past:
+        return None
+    start, event = max(past, key=lambda pair: pair[0])
+    return {"start": start, "raw": event}
 
 
 # Reads a business value from sofia.config.yaml — handlers need the spoken copy and the stage map.
