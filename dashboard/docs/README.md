@@ -83,15 +83,34 @@ esas dos variables y reinicias. No hay nada hardcodeado en el código.
 
 ## 4. Desplegar
 
-El panel es una app Next.js estándar; despliega en Vercel o donde prefieras. Lo
-único no negociable: **las cuatro variables de entorno se configuran en el panel de
-tu hosting**, nunca se commitean.
+El panel es una app Next.js estándar. Lo único no negociable: **las cuatro variables
+de entorno se configuran en el panel de tu hosting**, nunca se commitean.
 
-En Vercel: Project → Settings → Environment Variables → las cuatro. Ponlas como
-variables normales (no expuestas al cliente); Next las lee del lado del servidor.
+### Vercel, importando el repo desde GitHub
+
+Este panel vive en el **subdirectorio `dashboard/`** de un repo que también contiene
+el backend en Python. Eso hace que **el Root Directory sea obligatorio** — sin él,
+Vercel intenta construir desde la raíz del repo, no encuentra `package.json` y falla.
+
+Al importar el proyecto en Vercel, configura exactamente esto:
+
+| Ajuste | Valor |
+|--------|-------|
+| **Framework Preset** | Next.js (Vercel lo detecta solo) |
+| **Root Directory** | `dashboard` ← **crítico**, sin esto no compila |
+| **Build Command** | `next build` (default; no lo cambies) |
+| **Output Directory** | (déjalo en blanco; Next lo maneja) |
+| **Install Command** | `npm install` (default) |
+| **Node.js Version** | **20.x** (o superior) — también está fijado en `package.json` con `engines.node` |
+
+Luego, **Settings → Environment Variables**, agrega las cuatro (§1) como variables
+normales de servidor —**ninguna** marcada como expuesta al cliente, ninguna con
+`NEXT_PUBLIC_`—. Next las lee del lado del servidor.
+
+Con eso, cada push a la rama conectada despliega solo. O desde la terminal, dentro
+de `dashboard/`:
 
 ```bash
-# desde dashboard/
 vercel        # preview primero
 vercel --prod # cuando el preview se vea bien
 ```
