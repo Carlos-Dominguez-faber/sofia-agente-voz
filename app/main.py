@@ -822,7 +822,9 @@ async def health() -> JSONResponse:
 # Modal authenticates via CLI (`modal token new`), never through .env.
 # Runtime secrets come from the Modal Secret `agente-voz-credentials`.
 #
-# Deploy:  modal deploy app/main.py
+# Deploy:  modal deploy app/main.py::modal_app
+#          (el sufijo ::modal_app es obligatorio — Modal busca por defecto
+#           una variable llamada `app` y la nuestra se llama `modal_app`)
 # Local:   uvicorn app.main:web_app --reload
 # --------------------------------------------------------------------------
 
@@ -847,6 +849,11 @@ if modal is not None:
         # sofia.config.yaml must travel with the code: ghl_service resolves it
         # relative to the package root, which is /root inside the image.
         .add_local_file("sofia.config.yaml", "/root/sofia.config.yaml")
+        # prompts/ must travel too: the post-call analysis reads
+        # prompts/<industry>.yaml on every call_ended. Without this the analysis
+        # raises inside the webhook and fails silently (the webhook always
+        # answers 200 by design, so Retell never retries and nothing surfaces).
+        .add_local_dir("prompts", "/root/prompts")
         .add_local_python_source("app")
     )
 

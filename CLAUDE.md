@@ -299,3 +299,13 @@ acceso al sistema de citas: primero las manos, luego la voz.
 - **`get_free_slots` devuelve claves que no son fechas** (`traceId`). Filtrarlas antes de
   iterar o el parseo truena.
 - **Citas en UTC pelón salen con la hora corrida.** Siempre ISO 8601 con offset.
+- **El deploy necesita el sufijo `::modal_app`.** El comando es
+  `modal deploy app/main.py::modal_app`. Sin el sufijo Modal busca por defecto una variable
+  llamada `app` en el módulo y la nuestra se llama `modal_app` — falla antes de construir
+  nada. Lo mismo aplica a `modal run` con el worker outbound.
+- **Los archivos de datos NO viajan solos a la imagen de Modal.** `sofia.config.yaml` y
+  `prompts/` se agregan explícitamente con `.add_local_file()` y `.add_local_dir()`. Si
+  falta uno, el análisis post-llamada revienta **en silencio**: el webhook responde 200 por
+  diseño (para que Retell no reintente), así que nada sale a la superficie y parece que
+  simplemente no se guardó el resumen. Cada vez que agregues un archivo de datos nuevo al
+  proyecto, agrégalo también a la imagen.
