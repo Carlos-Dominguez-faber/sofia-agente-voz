@@ -46,7 +46,7 @@ agent:
   # Ese es el estado emocional que Sofía tiene que sostener.
 
   voice:
-    provider: elevenlabs
+    provider: platform     # voz de plataforma de Retell (retell-Andrea), NO ElevenLabs
     language: "es-419"     # Retell solo acepta es-ES y es-419; México cae en es-419
     style: "cálido"
     voice_id: "retell-Andrea"        # voz de plataforma de Retell, acento mexicano, femenina
