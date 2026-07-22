@@ -7,6 +7,7 @@
  * section and nothing else. One dead API never blanks the page.
  */
 
+import { AgentConfig } from "@/components/AgentConfig";
 import { Funnel } from "@/components/Funnel";
 import { LeadTemperature } from "@/components/LeadTemperature";
 import { ManualCall } from "@/components/ManualCall";
@@ -15,8 +16,10 @@ import { PromptEditor } from "@/components/PromptEditor";
 import { RecentCalls } from "@/components/RecentCalls";
 import { ServicesStatus } from "@/components/ServicesStatus";
 import { Section, WithResult } from "@/components/SourceState";
+import { TestCall } from "@/components/TestCall";
 import { branding } from "@/config/branding";
 import {
+  getAgentConfig,
   getCalls,
   getFunnel,
   getMetrics,
@@ -33,13 +36,14 @@ const RANGE_DAYS = 30;
 export default async function DashboardPage() {
   // Fetched together rather than in sequence: seven round trips one after
   // another is seven times the wait for a page that is read at a glance.
-  const [metrics, temperature, funnel, calls, prompt, services] = await Promise.all([
+  const [metrics, temperature, funnel, calls, prompt, services, agentConfig] = await Promise.all([
     getMetrics(RANGE_DAYS),
     getTemperature(),
     getFunnel(),
     getCalls(RANGE_DAYS, 20),
     getPrompt(),
     getServicesStatus(),
+    getAgentConfig(),
   ]);
 
   return (
@@ -93,21 +97,35 @@ export default async function DashboardPage() {
         <WithResult result={calls}>{(data) => <RecentCalls list={data} />}</WithResult>
       </Section>
 
-      {/* 5 — El prompt */}
+      {/* 5 — Configuración de Sofía: voz + comportamiento, en vivo */}
+      <Section
+        title={`Configuración de ${branding.agentName}`}
+        description="Cómo suena y se comporta. Los cambios se aplican a las llamadas de inmediato."
+      >
+        <WithResult result={agentConfig}>{(data) => <AgentConfig config={data} />}</WithResult>
+        <div className="mt-6 border-t border-slate-200 pt-4 dark:border-slate-800">
+          <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+            Escucha los cambios
+          </p>
+          <TestCall />
+        </div>
+      </Section>
+
+      {/* 6 — El prompt */}
       <Section
         title={`Cómo habla ${branding.agentName}`}
-        description="Edita aquí. No hace falta entrar a ningún otro sistema."
+        description="Edita el guion aquí. No hace falta entrar a ningún otro sistema."
       >
         <WithResult result={prompt}>{(data) => <PromptEditor prompt={data} />}</WithResult>
       </Section>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        {/* 6 — Llamada manual */}
+        {/* 7 — Llamada manual */}
         <Section title="Llamar a un paciente" description="Marca ahora mismo">
           <ManualCall agentName={branding.agentName} />
         </Section>
 
-        {/* 7 — Estado */}
+        {/* 8 — Estado */}
         <Section title="Estado del sistema">
           <WithResult result={services}>{(data) => <ServicesStatus status={data} />}</WithResult>
         </Section>

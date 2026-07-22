@@ -89,7 +89,7 @@ export type CallDetail = {
     probabilidad_asistir: string | number | null;
     motivo: string | null;
   };
-  recording_url: string | null;
+  has_recording: boolean;
   sources: Sources;
 };
 
@@ -137,7 +137,23 @@ export type PromptPayload = {
 };
 
 export type ServiceStatus = {
-  services: Array<{ service: string; ok: boolean; detail?: string } & Record<string, unknown>>;
+  services: Array<
+    { service: string; ok: boolean; detail?: string } & Record<string, unknown>
+  >;
   all_ok: boolean;
   degraded: string[];
+};
+
+export type CuratedVoice = { voice_id: string; label: string; note: string };
+
+export type AgentConfig = {
+  voice_id: string | null;
+  voice_speed: number | null;
+  expressiveness: boolean | null;
+  behaviour: string | null;
+  curated_voices: CuratedVoice[];
+  speed_min: number;
+  speed_max: number;
+  presets: string[];
+  synced_agents: string[];
 };

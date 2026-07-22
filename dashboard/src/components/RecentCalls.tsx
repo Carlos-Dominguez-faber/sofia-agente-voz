@@ -54,7 +54,11 @@ function Detail({ callId }: { callId: string }) {
   }, [callId]);
 
   if (loading) {
-    return <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Cargando detalle…</p>;
+    return (
+      <p className="p-4 text-sm text-slate-500 dark:text-slate-400">
+        Cargando detalle…
+      </p>
+    );
   }
   if (error || !detail) {
     return (
@@ -77,7 +81,8 @@ function Detail({ callId }: { callId: string }) {
         </div>
       ) : (
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Esta llamada no tiene resumen. Ocurre cuando quien llamó colgó antes de dar sus datos.
+          Esta llamada no tiene resumen. Ocurre cuando quien llamó colgó antes
+          de dar sus datos.
         </p>
       )}
 
@@ -89,7 +94,8 @@ function Detail({ callId }: { callId: string }) {
         ) : null}
         {detail.analysis.probabilidad_asistir != null ? (
           <span className="text-slate-600 dark:text-slate-300">
-            Probabilidad de asistir: <strong>{String(detail.analysis.probabilidad_asistir)}/10</strong>
+            Probabilidad de asistir:{" "}
+            <strong>{String(detail.analysis.probabilidad_asistir)}/10</strong>
           </span>
         ) : null}
         {detail.analysis.motivo ? (
@@ -98,6 +104,28 @@ function Detail({ callId }: { callId: string }) {
           </span>
         ) : null}
       </div>
+
+      {detail.has_recording ? (
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Grabación
+          </h4>
+          {/* Patient audio, streamed through the token-gated backend proxy — the
+              raw Retell URL never reaches the browser. Loads only for someone
+              already past the panel's password gate. */}
+          <audio
+            controls
+            preload="none"
+            src={`/api/calls/${encodeURIComponent(detail.call_id)}/recording`}
+            className="mt-1 w-full max-w-md"
+          >
+            Tu navegador no puede reproducir este audio.
+          </audio>
+          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+            Audio de una llamada real. Trátalo como información del paciente.
+          </p>
+        </div>
+      ) : null}
 
       {detail.tool_calls.length > 0 ? (
         <div>
@@ -117,7 +145,9 @@ function Detail({ callId }: { callId: string }) {
                         : "h-2 w-2 rounded-full bg-slate-400"
                   }
                 />
-                <span className="font-mono text-slate-700 dark:text-slate-300">{tool.name}</span>
+                <span className="font-mono text-slate-700 dark:text-slate-300">
+                  {tool.name}
+                </span>
                 <span className="text-slate-400 dark:text-slate-500">
                   {tool.succeeded === true
                     ? "ok"
@@ -159,7 +189,9 @@ function Row({ call }: { call: CallRow }) {
             className="text-left text-sm font-medium text-slate-900 dark:text-slate-100"
           >
             {call.contact_name || call.phone || (
-              <span className="text-slate-400 dark:text-slate-500">Sin identificar</span>
+              <span className="text-slate-400 dark:text-slate-500">
+                Sin identificar
+              </span>
             )}
           </button>
         </td>
@@ -207,8 +239,8 @@ export function RecentCalls({ list }: { list: CallList }) {
   if (list.calls.length === 0) {
     return (
       <p className="rounded-lg border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
-        No hubo llamadas en este periodo. (Esto sí es un dato: la consulta respondió
-        correctamente.)
+        No hubo llamadas en este periodo. (Esto sí es un dato: la consulta
+        respondió correctamente.)
       </p>
     );
   }
@@ -217,8 +249,8 @@ export function RecentCalls({ list }: { list: CallList }) {
     <div className="space-y-3">
       {crmDown ? (
         <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-300">
-          El CRM no respondió, así que faltan nombres y resúmenes. Las llamadas y sus duraciones
-          sí son correctas.
+          El CRM no respondió, así que faltan nombres y resúmenes. Las llamadas
+          y sus duraciones sí son correctas.
         </p>
       ) : null}
 
@@ -232,7 +264,9 @@ export function RecentCalls({ list }: { list: CallList }) {
               <th className="px-3 pb-2 font-medium">Duración</th>
               <th className="px-3 pb-2 font-medium">Resultado</th>
               <th className="px-3 pb-2 font-medium">Urgencia</th>
-              <th className="hidden px-3 pb-2 font-medium lg:table-cell">Resumen</th>
+              <th className="hidden px-3 pb-2 font-medium lg:table-cell">
+                Resumen
+              </th>
             </tr>
           </thead>
           <tbody>

@@ -333,9 +333,29 @@ def call_detail(call_id: str) -> dict[str, Any]:
         "transcript": transcript_from(call),
         "tool_calls": tool_calls_from(call),
         "analysis": summary,
-        "recording_url": call.get("recording_url"),
+        # NOT the raw recording_url. Retell serves recordings from an
+        # unauthenticated CloudFront URL — anyone holding it can replay a
+        # patient's call with no session. The bytes are streamed instead through
+        # /dashboard/calls/{id}/recording, behind the token; the browser only
+        # learns whether a recording exists, never where it lives.
+        "has_recording": bool(call.get("recording_url")),
         "sources": {"retell": "ok", "ghl": ghl_status},
     }
+
+
+def call_recording_url(call_id: str) -> str | None:
+    """The raw Retell recording URL for a call — server-side use only.
+
+    Exists so the token-gated streaming endpoint can fetch the bytes. It must
+    never be returned to the browser: that is the leak this whole indirection
+    exists to close.
+    """
+    try:
+        call = retell_service.get_call(call_id)
+    except Exception as exc:  # noqa: BLE001
+        raise SourceUnavailable("retell", str(exc)) from exc
+    url = call.get("recording_url")
+    return str(url) if url else None
 
 
 # --------------------------------------------------------------------------

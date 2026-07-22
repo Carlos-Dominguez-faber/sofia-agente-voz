@@ -25,8 +25,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
+import requests
+from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.auth import require_token
@@ -137,6 +138,57 @@ def get_call(call_id: str) -> JSONResponse:
         return _ok(dashboard_service.call_detail(call_id))
     except SourceUnavailable as exc:
         return _source_down(exc)
+
+
+@router.get("/calls/{call_id}/recording")
+def get_call_recording(call_id: str) -> Response:
+    """Stream a call's audio through the token gate.
+
+    The recording is patient PII, and Retell serves it from an unauthenticated
+    CloudFront URL. Returning that URL to the browser would put the audio one
+    shared link away from anyone, with no session. So the bytes are fetched
+    server-side and streamed back through this endpoint, which sits behind the
+    dashboard token like every other read here. The raw URL never leaves the
+    backend.
+    """
+    try:
+        url = dashboard_service.call_recording_url(call_id)
+    except SourceUnavailable as exc:
+        return _source_down(exc)
+
+    if not url:
+        return _fail(
+            status=404,
+            code="no_recording",
+            detail="Call has no recording",
+            message="Esta llamada no tiene grabación.",
+        )
+
+    try:
+        upstream = requests.get(url, stream=True, timeout=(5, 30))
+    except requests.RequestException as exc:
+        LOG.error("Could not fetch recording for %s: %s", call_id, exc)
+        return _fail(status=502, code="recording_unavailable", detail=str(exc), message="No pude cargar la grabación.")
+
+    if upstream.status_code != 200:
+        upstream.close()
+        return _fail(
+            status=502,
+            code="recording_unavailable",
+            detail=f"upstream HTTP {upstream.status_code}",
+            message="No pude cargar la grabación.",
+        )
+
+    # Retell serves recordings as WAV but CloudFront labels them
+    # binary/octet-stream; normalize so the browser's <audio> plays it reliably.
+    upstream_type = upstream.headers.get("Content-Type", "")
+    media_type = upstream_type if upstream_type.startswith("audio/") else "audio/wav"
+    return StreamingResponse(
+        upstream.iter_content(chunk_size=65536),
+        media_type=media_type,
+        # Not cacheable by shared caches: it is one patient's private audio.
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 # --------------------------------------------------------------------------
@@ -282,6 +334,93 @@ def outbound_call(payload: OutboundCallRequest) -> JSONResponse:
         )
 
     return _ok(result, message=f"Llamando a {normalized}.")
+
+
+# --------------------------------------------------------------------------
+# Agent configuration — voice + behaviour, pushed live to Retell
+# --------------------------------------------------------------------------
+
+
+class AgentConfigUpdate(BaseModel):
+    voice_id: str | None = Field(default=None, description="Uno de la lista curada")
+    voice_speed: float | None = Field(default=None, description="Velocidad, acotada en el backend")
+    expressiveness: bool | None = Field(default=None, description="Toggle de expresividad")
+    behaviour: str | None = Field(default=None, description="estricta | balanceada | flexible")
+
+
+@router.get("/agent-config")
+def get_agent_config() -> JSONResponse:
+    """The current voice and behaviour, mapped to the panel's own vocabulary."""
+    try:
+        return _ok(retell_service.current_agent_config())
+    except Exception as exc:  # noqa: BLE001
+        return _source_down(SourceUnavailable("retell", str(exc)))
+
+
+@router.post("/agent-config")
+def post_agent_config(payload: AgentConfigUpdate) -> JSONResponse:
+    """Change voice/behaviour and PUBLISH it to every managed agent, live.
+
+    The whole point of this endpoint: it does not leave the change in a draft.
+    publish_agent_change takes it to the published version the phone number
+    actually serves — on both the inbound and outbound agents.
+    """
+    try:
+        result = retell_service.apply_agent_config(
+            voice_id=payload.voice_id,
+            voice_speed=payload.voice_speed,
+            expressiveness=payload.expressiveness,
+            behaviour=payload.behaviour,
+        )
+    except ValueError as exc:
+        # A bound was violated — the request was understood and refused.
+        return _fail(
+            status=422,
+            code="invalid_config",
+            detail=str(exc),
+            message="Ese ajuste está fuera de lo permitido.",
+        )
+    except Exception as exc:  # noqa: BLE001 - includes the partial-failure case
+        LOG.error("Agent config publish failed: %s", exc)
+        return _fail(
+            status=502,
+            code="publish_failed",
+            detail=str(exc),
+            message="No pude aplicar el cambio en Retell. Revisa el estado de los servicios.",
+        )
+
+    return _ok(result, message="Listo. Sofía ya suena así en las llamadas.")
+
+
+class TestCallRequest(BaseModel):
+    phone: str = Field(description="Tu número para la llamada de prueba")
+
+
+@router.post("/test-call")
+def test_call(payload: TestCallRequest) -> JSONResponse:
+    """Call the owner's own number so they can hear the config they just saved."""
+    try:
+        normalized = to_e164(payload.phone)
+    except ValueError as exc:
+        return _fail(
+            status=400,
+            code="invalid_phone",
+            detail=str(exc),
+            message="Ese número no es válido. Escríbelo con lada, por ejemplo +52 998 123 4567.",
+        )
+
+    try:
+        result = retell_service.start_outbound_call(normalized)
+    except Exception as exc:  # noqa: BLE001
+        LOG.error("Test call failed for %s: %s", normalized, exc)
+        return _fail(
+            status=502,
+            code="call_failed",
+            detail=str(exc),
+            message="No pude iniciar la llamada de prueba. Revisa el estado de los servicios.",
+        )
+
+    return _ok(result, message=f"Te estoy llamando al {normalized} para que escuches a Sofía.")
 
 
 # --------------------------------------------------------------------------

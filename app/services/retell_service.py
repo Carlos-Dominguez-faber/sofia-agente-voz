@@ -911,35 +911,332 @@ def get_call(call_id: str) -> dict[str, Any]:
     return _as_dict(_client().call.retrieve(call_id))
 
 
-def get_llm(llm_id: str | None = None) -> dict[str, Any]:
-    """The live LLM object, including the prompt actually being spoken."""
-    return _as_dict(_client().llm.retrieve(llm_id or _inbound_llm_id()))
+def get_live_prompt(agent_id: str | None = None) -> str:
+    """The prompt Retell is speaking on live calls — the PUBLISHED version.
 
-
-def get_live_prompt(llm_id: str | None = None) -> str:
-    """The prompt Retell is running right now — the source of truth in production."""
-    llm = get_llm(llm_id)
+    Reads the published LLM, not the latest draft. Before this pinned the
+    published version, a draft left by a console edit could be reported as the
+    live prompt, and the undo baseline would capture it — an undo that reverts to
+    something no caller ever heard.
+    """
+    llm = _live_llm(agent_id or _inbound_agent_id())
     prompt = llm.get("general_prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise RetellServiceError("The live Retell LLM has no general_prompt set")
     return prompt
 
 
-def set_live_prompt(prompt: str, *, llm_id: str | None = None) -> dict[str, Any]:
-    """Publish a prompt to Retell. Tools and begin_message are left untouched.
+# ==========================================================================
+# The control panel — versioned update + PUBLISH
+#
+# THE RULE THAT MAKES THE PANEL REAL, not decorative: every change the client
+# saves must reach the LIVE phone number, not sit in a draft. Retell splits an
+# agent (and its LLM) into versions, and `update` alone writes to a DRAFT — the
+# number keeps serving the last PUBLISHED version. That is the V07/V09 bug: the
+# prompt "saved", nothing changed on a real call.
+#
+# The model, validated against throwaway agents before a line of this was
+# written:
+#   - Agent and LLM versions are coupled. Publishing the agent publishes the
+#     LLM it references, together.
+#   - A published LLM is frozen: `llm.update` on it returns
+#     400 "Cannot update published LLM". This is exactly what bit V09.
+#   - `agent.create_version(base_version=N)` spawns a fresh agent draft AND a
+#     coupled, editable LLM draft. This is the escape hatch V09 never found —
+#     no need to create a new agent, so no orphans.
+#   - Write param is `model_temperature`; it reads back as `api_model_temperature`.
+#
+# The flow, idempotent and orphan-free:
+#   base on the latest PUBLISHED version → create_version → update draft →
+#   publish. Basing on PUBLISHED (never a dangling draft) means a half-finished
+#   draft left in the console is never shipped live as a side effect.
+# ==========================================================================
 
-    Only `general_prompt` is sent. Re-sending the tool definitions here would
-    let a prompt edit silently rewrite the tool wiring, and the tools point at
-    the Modal backend — that is provisioning, not content, and it belongs to
-    `update_inbound_llm`.
+
+def _agent_llm_id(agent_id: str) -> str:
+    """The stable LLM id an agent's response engine points at (same across versions)."""
+    engine = _as_dict(_client().agent.retrieve(agent_id)).get("response_engine") or {}
+    llm_id = engine.get("llm_id")
+    if not llm_id:
+        raise RetellServiceError(f"Agent {agent_id} has no retell-llm response engine")
+    return str(llm_id)
+
+
+def _versions_list(agent_id: str) -> list[dict[str, Any]]:
+    """All versions of an agent. The SDK returns either a list or a `.versions` wrapper."""
+    resp = _client().agent.get_versions(agent_id)
+    raw = getattr(resp, "versions", None)
+    if raw is None:
+        raw = resp if isinstance(resp, list) else []
+    return [_as_dict(v) for v in raw]
+
+
+def _latest_published_version(agent_id: str) -> int:
+    """Highest version number that is currently published — what the number serves.
+
+    Deliberately ignores any newer unpublished draft. Building the next version
+    on top of the published one is what keeps mystery draft content from ever
+    reaching a live call.
+    """
+    published = [int(v["version"]) for v in _versions_list(agent_id) if v.get("is_published")]
+    if not published:
+        raise RetellServiceError(
+            f"Agent {agent_id} has no published version to base a change on. "
+            "It must be published once before the panel can edit it."
+        )
+    return max(published)
+
+
+def _published_agent(agent_id: str) -> dict[str, Any]:
+    """The agent as the phone number actually serves it — its latest PUBLISHED version.
+
+    `agent.retrieve` without a version returns the latest version, which is a
+    DRAFT whenever one exists — e.g. after the agency edits latency knobs in the
+    Retell console. A read that claims to report what callers hear MUST pin the
+    published version, or the panel shows a draft that is not live and the undo
+    baseline captures a prompt nobody is speaking.
+    """
+    version = _latest_published_version(agent_id)
+    return _as_dict(_client().agent.retrieve(agent_id, version=version))
+
+
+def _live_llm(agent_id: str) -> dict[str, Any]:
+    """The LLM version the PUBLISHED agent references — the prompt actually spoken."""
+    agent = _published_agent(agent_id)
+    engine = agent.get("response_engine") or {}
+    llm_id = engine.get("llm_id")
+    llm_version = engine.get("version")
+    if not llm_id or llm_version is None:
+        raise RetellServiceError(f"Published agent {agent_id} has no LLM reference")
+    return _as_dict(_client().llm.retrieve(llm_id, version=int(float(llm_version))))
+
+
+def publish_agent_change(
+    agent_id: str,
+    *,
+    voice_id: str | None = None,
+    voice_speed: float | None = None,
+    voice_temperature: float | None = None,
+    llm_temperature: float | None = None,
+    llm_general_prompt: str | None = None,
+) -> dict[str, Any]:
+    """Apply a change to one agent (and/or its LLM) and PUBLISH it live.
+
+    Any subset of the fields may be given. Voice fields land on the agent; the
+    temperature and prompt land on the coupled LLM. Whatever is passed ends up
+    on the live phone number, not in a draft.
+    """
+    published = _latest_published_version(agent_id)
+
+    # A fresh draft (agent + coupled LLM) built from the published version.
+    draft = _as_dict(_client().agent.create_version(agent_id, base_version=published))
+    draft_version = int(draft["version"])
+
+    llm_id = _agent_llm_id(agent_id)
+
+    # LLM edits go on the coupled draft that create_version just spawned.
+    llm_fields: dict[str, Any] = {}
+    if llm_temperature is not None:
+        llm_fields["model_temperature"] = llm_temperature
+    if llm_general_prompt is not None:
+        llm_fields["general_prompt"] = llm_general_prompt
+    if llm_fields:
+        _client().llm.update(llm_id, **llm_fields)
+
+    # Voice edits go on the agent draft (targets the latest draft, i.e. this one).
+    agent_fields: dict[str, Any] = {}
+    if voice_id is not None:
+        agent_fields["voice_id"] = voice_id
+    if voice_speed is not None:
+        agent_fields["voice_speed"] = voice_speed
+    if voice_temperature is not None:
+        agent_fields["voice_temperature"] = voice_temperature
+    if agent_fields:
+        _client().agent.update(agent_id, **agent_fields)
+
+    # Publish makes the draft — agent and coupled LLM — the live version.
+    _client().agent.publish(agent_id, version=draft_version)
+
+    LOG.info(
+        "Published agent %s v%s (voice=%s llm=%s)",
+        agent_id,
+        draft_version,
+        list(agent_fields),
+        list(llm_fields),
+    )
+    return {
+        "agent_id": agent_id,
+        "published_version": draft_version,
+        "based_on": published,
+        "voice_fields": list(agent_fields),
+        "llm_fields": list(llm_fields),
+    }
+
+
+def set_live_prompt(prompt: str, *, agent_id: str | None = None) -> dict[str, Any]:
+    """Publish an edited prompt to the LIVE inbound number.
+
+    This routes through publish_agent_change on purpose. The old version only
+    called `llm.update`, which wrote to a draft — so an edit from the panel
+    never reached a real call. Only the inbound agent is touched: the outbound
+    agent runs a different prompt of its own.
     """
     if not prompt or not prompt.strip():
         raise RetellServiceError("Refusing to publish an empty prompt")
 
-    target = llm_id or _inbound_llm_id()
-    llm = _client().llm.update(target, general_prompt=prompt)
-    LOG.info("Published prompt to Retell LLM %s (%s chars)", target, len(prompt))
-    return {"llm_id": getattr(llm, "llm_id", target), "prompt_chars": len(prompt)}
+    target_agent = agent_id or _inbound_agent_id()
+    result = publish_agent_change(target_agent, llm_general_prompt=prompt)
+    return {
+        "agent_id": target_agent,
+        "published_version": result["published_version"],
+        "prompt_chars": len(prompt),
+    }
+
+
+# --------------------------------------------------------------------------
+# The knobs the panel is allowed to turn — everything bounded
+#
+# A clinic owner cannot break Sofía from the panel. The voice is picked from a
+# curated es-419 list, the speed is clamped, the behaviour is three named
+# presets (never a raw temperature), and the latency / turn-taking knobs are not
+# here at all — those stay with the agency in the Retell console.
+# --------------------------------------------------------------------------
+
+# Curated voices, verified present on the account. All Mexican-accent, female —
+# Sofía is a female receptionist throughout the course; changing gender is niche
+# customization (/customize), not a client-facing panel control.
+CURATED_VOICES: list[dict[str, str]] = [
+    {"voice_id": "retell-Andrea", "label": "Andrea", "note": "La voz actual"},
+    {"voice_id": "retell-Gaby", "label": "Gaby", "note": "Cálida"},
+    {"voice_id": "retell-Claudia", "label": "Claudia", "note": "Clara"},
+    {"voice_id": "cartesia-Sofia", "label": "Sofía", "note": "Suave"},
+    {"voice_id": "11labs-Andrea", "label": "Andrea (ElevenLabs)", "note": "Natural"},
+]
+_CURATED_VOICE_IDS = frozenset(v["voice_id"] for v in CURATED_VOICES)
+
+VOICE_SPEED_MIN = 0.85
+VOICE_SPEED_MAX = 1.15
+
+# Behaviour, as the client sees it: three names, never the number underneath.
+# Capped at 0.5 — above that Sofía starts improvising in ways a clinic will not want.
+BEHAVIOUR_PRESETS: dict[str, float] = {"estricta": 0.2, "balanceada": 0.35, "flexible": 0.5}
+BEHAVIOUR_TEMP_MAX = 0.5
+
+# Expressiveness toggle -> the agent's voice_temperature (voice variation).
+EXPRESSIVENESS_ON = 1.1
+EXPRESSIVENESS_OFF = 0.5
+
+
+def _outbound_agent_id() -> str | None:
+    """The outbound agent id, or None on an inbound-only install."""
+    return (os.environ.get("RETELL_OUTBOUND_AGENT_ID") or "").strip() or None
+
+
+def _managed_agents() -> list[tuple[str, str]]:
+    """(label, agent_id) for every agent the panel keeps in sync.
+
+    Both agents get the same voice and behaviour so a call sounds the same
+    whether Sofía dialled out or the patient dialled in. The outbound agent is
+    included only if the install has one.
+    """
+    agents = [("inbound", _inbound_agent_id())]
+    outbound = _outbound_agent_id()
+    if outbound:
+        agents.append(("outbound", outbound))
+    return agents
+
+
+def _nearest_preset(temperature: float | None) -> str | None:
+    """Map a raw temperature back to the closest preset name for display."""
+    if temperature is None:
+        return None
+    return min(BEHAVIOUR_PRESETS, key=lambda name: abs(BEHAVIOUR_PRESETS[name] - temperature))
+
+
+def current_agent_config() -> dict[str, Any]:
+    """What the panel shows as the current state — read from the inbound agent.
+
+    The inbound agent is the reference; the two are kept in sync, so reading one
+    is enough. Temperature is mapped back to a preset name and voice_temperature
+    to the expressiveness toggle, so the panel never has to know the numbers.
+
+    Reads the PUBLISHED version — what callers actually hear — not the latest
+    draft a console edit may have left behind.
+    """
+    agent = _published_agent(_inbound_agent_id())
+    llm = _live_llm(_inbound_agent_id())
+    temperature = llm.get("api_model_temperature")
+    voice_temp = agent.get("voice_temperature")
+
+    return {
+        "voice_id": agent.get("voice_id"),
+        "voice_speed": agent.get("voice_speed"),
+        "expressiveness": (voice_temp or 0) >= EXPRESSIVENESS_ON if voice_temp is not None else None,
+        "behaviour": _nearest_preset(temperature),
+        "curated_voices": CURATED_VOICES,
+        "speed_min": VOICE_SPEED_MIN,
+        "speed_max": VOICE_SPEED_MAX,
+        "presets": list(BEHAVIOUR_PRESETS),
+        "synced_agents": [label for label, _ in _managed_agents()],
+    }
+
+
+def apply_agent_config(
+    *,
+    voice_id: str | None = None,
+    voice_speed: float | None = None,
+    expressiveness: bool | None = None,
+    behaviour: str | None = None,
+) -> dict[str, Any]:
+    """Validate, then push + PUBLISH a config change to every managed agent.
+
+    Bounds are enforced HERE, in the backend — never trusting the front. An
+    out-of-range value raises before anything touches Retell.
+    """
+    # --- Validate every field before mutating a single agent. ---
+    if voice_id is not None and voice_id not in _CURATED_VOICE_IDS:
+        raise ValueError(f"voice_id `{voice_id}` is not in the curated list {sorted(_CURATED_VOICE_IDS)}")
+    if voice_speed is not None and not (VOICE_SPEED_MIN <= voice_speed <= VOICE_SPEED_MAX):
+        raise ValueError(f"voice_speed must be within [{VOICE_SPEED_MIN}, {VOICE_SPEED_MAX}], got {voice_speed}")
+    if behaviour is not None and behaviour not in BEHAVIOUR_PRESETS:
+        raise ValueError(f"behaviour must be one of {list(BEHAVIOUR_PRESETS)}, got `{behaviour}`")
+
+    llm_temperature = BEHAVIOUR_PRESETS[behaviour] if behaviour else None
+    if llm_temperature is not None and llm_temperature > BEHAVIOUR_TEMP_MAX:
+        raise ValueError(f"resolved temperature {llm_temperature} exceeds the cap {BEHAVIOUR_TEMP_MAX}")
+    voice_temperature = None
+    if expressiveness is not None:
+        voice_temperature = EXPRESSIVENESS_ON if expressiveness else EXPRESSIVENESS_OFF
+
+    if voice_id is None and voice_speed is None and voice_temperature is None and llm_temperature is None:
+        raise ValueError("No changes to apply")
+
+    # --- Apply to every managed agent. Report each; never claim a false save. ---
+    results = []
+    failures = []
+    for label, agent_id in _managed_agents():
+        try:
+            outcome = publish_agent_change(
+                agent_id,
+                voice_id=voice_id,
+                voice_speed=voice_speed,
+                voice_temperature=voice_temperature,
+                llm_temperature=llm_temperature,
+            )
+            results.append({"agent": label, **outcome})
+        except Exception as exc:  # noqa: BLE001 - collected, not swallowed
+            LOG.error("Config publish failed for %s agent %s: %s", label, agent_id, exc)
+            failures.append({"agent": label, "error": str(exc)})
+
+    if failures:
+        # Partial failure is honest: say which agents are now on the new config
+        # and which are not, rather than reporting a clean save that desynced them.
+        raise RetellServiceError(
+            f"Config published to {[r['agent'] for r in results]} but FAILED on "
+            f"{[f['agent'] for f in failures]}: {failures}. The agents may be out of sync."
+        )
+
+    return {"applied": results, "behaviour": behaviour, "voice_id": voice_id}
 
 
 def start_outbound_call(to_number: str, *, from_number: str | None = None) -> dict[str, Any]:

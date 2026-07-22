@@ -17,6 +17,7 @@ import "server-only";
 
 import { backendToken, backendUrl } from "@/lib/env";
 import type {
+  AgentConfig,
   CallDetail,
   CallList,
   Envelope,
@@ -144,3 +145,5 @@ export const getPrompt = () => backendFetch<PromptPayload>("/dashboard/agent/pro
 
 export const getServicesStatus = () =>
   backendFetch<ServiceStatus>("/dashboard/services/status");
+
+export const getAgentConfig = () => backendFetch<AgentConfig>("/dashboard/agent-config");
