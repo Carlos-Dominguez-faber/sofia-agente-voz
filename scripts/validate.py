@@ -105,7 +105,13 @@ def validate_ghl() -> dict[str, Any]:
 
 
 def validate_retell() -> dict[str, Any]:
-    """Key is valid and the inbound agent still exists."""
+    """Key is valid and — once provisioned — the inbound agent still exists.
+
+    Before `provision` runs there is no agent to look up, so demanding one here
+    would deadlock the install: `all` validates before it provisions. When the
+    id is absent the key is still checked against the real API; the missing
+    agent is reported as a warning, not a failure.
+    """
     try:
         from app.services import retell_service
     except ImportError as exc:
@@ -113,6 +119,22 @@ def validate_retell() -> dict[str, Any]:
             "Retell",
             f"No se pudo importar la capa de Retell: {exc}",
             "Instala las dependencias del proyecto.",
+        )
+
+    if not retell_service.inbound_agent_configured():
+        try:
+            summary = retell_service.test_api_key()
+        except Exception as exc:  # noqa: BLE001
+            return _fail(
+                "Retell",
+                str(exc),
+                "Revisa RETELL_API_KEY en .env: la copias del dashboard de Retell, "
+                "en Settings → API Keys.",
+            )
+        return _ok(
+            "Retell",
+            f"API key válida · {summary.get('agent_count', 0)} agente(s) en la cuenta",
+            warning="Los agentes de Sofía todavía no existen; `provision` los crea más adelante.",
         )
 
     try:

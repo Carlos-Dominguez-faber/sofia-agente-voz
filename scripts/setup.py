@@ -7,19 +7,27 @@ known gotchas.
 
 Subcommands (the interview is separate and interactive):
 
+  preflight   — Python 3.12 + the project venv, BEFORE anything else. Modal only
+                supports 3.12 here, and finding that out halfway through an
+                install is the worst time to find it out.
   interview   — the human pastes credentials; this writes them to .env. It also
                 offers to update the business fields and the crm ids in
                 sofia.config.yaml. Secrets are read hidden and NEVER printed.
   validate    — every credential against its real API, via scripts/validate.py.
                 Stops on the first failure with the exact fix.
   secret      — push the whole .env into the Modal Secret, idempotently.
-  deploy      — modal deploy app/main.py::modal_app  (the ::modal_app suffix is
-                mandatory; the image already packs sofia.config.yaml + prompts/).
-                Captures the MODAL_URL it prints back into .env.
-  provision   — create the Retell inbound + outbound agents and persist their
-                ids. Confirms each agent shipped with end_call, update_lead_status
-                and end_call_after_silence_ms wired — the V06/V07/V09 regression.
-  twilio      — wire the number to Retell (trunk, origination, ACL, import).
+  deploy      — modal deploy of BOTH apps: app/main.py::modal_app (the tools and
+                webhooks) and app/worker.py::modal_app (the outbound cron). The
+                ::modal_app suffix is mandatory; the image already packs
+                sofia.config.yaml + prompts/. Captures the MODAL_URL it prints
+                back into .env — it is never asked for in the interview, because
+                it does not exist until this step runs.
+  provision   — create the Retell inbound + outbound agents, PUBLISH v0 of each,
+                and persist their ids. Confirms each agent shipped with end_call,
+                update_lead_status and end_call_after_silence_ms wired — the
+                V06/V07/V09 regression.
+  twilio      — wire the number to Retell (trunk, origination, ACL, import) and
+                bind BOTH agents to it: inbound and outbound.
   vercel      — deploy the client panel and set its production env.
 
 `all` does NOT run these top to bottom: they depend on each other. It runs
@@ -39,6 +47,7 @@ import getpass
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -167,6 +176,152 @@ def set_config_scalar(section: str, key: str, value: str, *, quote: bool = True)
 
 
 # --------------------------------------------------------------------------
+# Step 0 — Python preflight
+#
+# Modal only supports Python 3.12 for this project. Discovering that at the
+# `deploy` step — after the interview, the validations and the Retell agents —
+# is the most expensive possible moment: everything before it has to be redone
+# under a different interpreter. So it is checked FIRST, and the fix is offered
+# instead of merely described.
+#
+# This runs under whatever interpreter the person happened to have (3.13, 3.14),
+# so it must not import anything from `app/`: stdlib only.
+# --------------------------------------------------------------------------
+
+_REQUIRED_PY = (3, 12)
+_VENV_DIR = _REPO_ROOT / ".venv"
+_BREW_INSTALL = "brew install python@3.12"
+
+
+def _venv_python() -> Path:
+    """Path to the interpreter inside the project venv (POSIX and Windows)."""
+    if os.name == "nt":
+        return _VENV_DIR / "Scripts" / "python.exe"
+    return _VENV_DIR / "bin" / "python"
+
+
+def _interpreter_version(executable: Path | str) -> tuple[int, int] | None:
+    """(major, minor) of an interpreter, or None if it cannot be run."""
+    try:
+        result = subprocess.run(
+            [str(executable), "-c", "import sys; print(sys.version_info[0], sys.version_info[1])"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    parts = result.stdout.split()
+    if len(parts) != 2:
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def _find_python312() -> str | None:
+    """Locate a 3.12 interpreter: PATH first, then the usual Homebrew prefixes."""
+    candidates = ["python3.12"]
+    candidates += [
+        "/opt/homebrew/bin/python3.12",  # Apple Silicon
+        "/usr/local/bin/python3.12",     # Intel Mac / Linuxbrew
+    ]
+    for candidate in candidates:
+        found = shutil.which(candidate) if "/" not in candidate else (
+            candidate if Path(candidate).exists() else None
+        )
+        if found and _interpreter_version(found) == _REQUIRED_PY:
+            return found
+    return None
+
+
+def _ensure_pip(executable: Path) -> None:
+    """Make sure the venv has pip. Some venvs (uv's, `--without-pip`) ship without it."""
+    probe = subprocess.run(
+        [str(executable), "-m", "pip", "--version"], capture_output=True, text=True
+    )
+    if probe.returncode == 0:
+        return
+    print("  el entorno no traía pip; lo instalo con ensurepip")
+    _run(
+        [str(executable), "-m", "ensurepip", "--upgrade"],
+        cwd=_REPO_ROOT,
+        what="instalar pip dentro del entorno virtual",
+        capture=True,
+    )
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """Guarantee a 3.12 venv exists with the project installed, before step 1.
+
+    Prints the interpreter every later command should use. With --auto-install
+    it will run Homebrew for the missing 3.12; without it, it stops and hands
+    over the exact command to run.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    print(f"\nPython que está corriendo este script: {running}")
+
+    python312 = _find_python312()
+    if not python312:
+        print("No encontré Python 3.12 en el sistema. Modal solo soporta 3.12 en este proyecto.")
+        if not args.auto_install:
+            raise SetupError(
+                "Falta Python 3.12. Instálalo con:\n\n"
+                f"    {_BREW_INSTALL}\n\n"
+                "y vuelve a correr `python3 scripts/setup.py preflight`. (Si no usas Mac, "
+                "instala 3.12 con el gestor de tu sistema o desde python.org.)"
+            )
+        if not shutil.which("brew"):
+            raise SetupError(
+                "Pediste --auto-install pero no hay Homebrew. Instálalo desde brew.sh, o "
+                "instala Python 3.12 a mano y vuelve a correr este paso."
+            )
+        print(f"Instalando Python 3.12 con Homebrew: {_BREW_INSTALL}")
+        _run(_BREW_INSTALL.split(), cwd=_REPO_ROOT, what="instalar Python 3.12 con Homebrew")
+        python312 = _find_python312()
+        if not python312:
+            raise SetupError(
+                "Homebrew terminó pero sigo sin ver `python3.12` en el PATH. Abre una "
+                "terminal nueva y vuelve a correr este paso."
+            )
+
+    print(f"Python 3.12 encontrado en: {python312}")
+
+    venv_python = _venv_python()
+    venv_version = _interpreter_version(venv_python) if venv_python.exists() else None
+
+    if venv_version and venv_version != _REQUIRED_PY:
+        raise SetupError(
+            f"El entorno en {_VENV_DIR} corre Python {venv_version[0]}.{venv_version[1]}, no 3.12. "
+            f"Bórralo (`rm -rf {_VENV_DIR}`) y vuelve a correr este paso para recrearlo con 3.12."
+        )
+
+    if not venv_version:
+        print(f"Creando el entorno virtual con 3.12 en {_VENV_DIR}...")
+        _run([python312, "-m", "venv", str(_VENV_DIR)], cwd=_REPO_ROOT, what="crear el entorno virtual")
+    else:
+        print(f"El entorno en {_VENV_DIR} ya corre Python 3.12.")
+
+    print("Instalando las dependencias del proyecto (pip install -e .)...")
+    _ensure_pip(_venv_python())
+    _run(
+        [str(_venv_python()), "-m", "pip", "install", "--quiet", "--upgrade", "pip"],
+        cwd=_REPO_ROOT,
+        what="actualizar pip",
+    )
+    _run(
+        [str(_venv_python()), "-m", "pip", "install", "--quiet", "-e", "."],
+        cwd=_REPO_ROOT,
+        what="instalar las dependencias del proyecto",
+    )
+
+    print("\n" + "=" * 60)
+    print("PREFLIGHT OK — usa ESTE intérprete para todos los pasos siguientes:")
+    print(f"  {_venv_python()}")
+    print(f"  (o activa el entorno: source {_VENV_DIR}/bin/activate)")
+    print("=" * 60 + "\n")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Step 1 — interview
 # --------------------------------------------------------------------------
 
@@ -182,10 +337,14 @@ _CREDENTIALS: list[tuple[str, str, bool]] = [
     ("HIGHLEVEL_PIPELINE_ID", "GoHighLevel · Pipeline id (Nuevos Pacientes)", False),
     ("HIGHLEVEL_STAGE_ID", "GoHighLevel · Stage id (Cita Agendada)", False),
     ("ANTHROPIC_API_KEY", "Anthropic · API key", True),
-    ("MODAL_URL", "Modal · URL pública del backend (la imprime `modal deploy`)", False),
 ]
 
-# The agent ids are filled by `provision`, not by hand — they are not asked here.
+# MODAL_URL is deliberately NOT here. It does not exist until `modal deploy`
+# prints it, so asking the person for it at interview time asks for something
+# nobody can have yet. `deploy` captures it from its own output and writes it.
+#
+# The agent ids and DASHBOARD_API_TOKEN follow the same rule: they are produced
+# by `provision` and `vercel`, never typed by hand.
 
 # Business fields the interview offers to update in sofia.config.yaml.
 # (section, key, human label, quote).
@@ -303,13 +462,30 @@ def _assert_agent_wiring(label: str, result: dict[str, Any]) -> None:
         )
 
 
+def _assert_published(label: str, result: dict[str, Any]) -> None:
+    """A provisioned agent must leave a PUBLISHED version behind.
+
+    `agent.create` leaves an unpublished draft. The control panel edits by
+    branching from the latest published version, so an agent that was never
+    published makes the panel fail on first load with `source_unavailable`. The
+    install is not done until the baseline exists.
+    """
+    if result.get("published_version") is None:
+        raise SetupError(
+            f"El agente {label} quedó SIN versión publicada. El panel de control no puede "
+            f"editarlo así (falla con `source_unavailable`). Revisa publish_initial_version "
+            f"en retell_service."
+        )
+
+
 def cmd_provision(args: argparse.Namespace) -> int:
     """Create the inbound and outbound agents; persist their ids to .env."""
     if not read_env().get("MODAL_URL"):
         raise SetupError(
             "MODAL_URL no está en .env. Las tools del agente apuntan al backend, así que "
-            "necesita existir antes de provisionar. Si aún no despliegas, corre primero "
-            "`python scripts/setup.py deploy` y guarda la URL, o pégala con la entrevista."
+            "el backend tiene que existir antes de provisionar. Corre primero "
+            "`python scripts/setup.py deploy`: él la captura de la salida de Modal y la "
+            "escribe solo. No la escribas a mano."
         )
 
     from app.services import retell_service
@@ -317,14 +493,23 @@ def cmd_provision(args: argparse.Namespace) -> int:
     print("\nCreando el agente inbound...")
     inbound = retell_service.provision_inbound()
     _assert_agent_wiring("inbound", inbound)
-    print(f"  inbound listo: {inbound['agent_id']} · tools {inbound.get('tools')}")
+    _assert_published("inbound", inbound)
+    print(
+        f"  inbound listo: {inbound['agent_id']} · tools {inbound.get('tools')} "
+        f"· publicado v{inbound.get('published_version')}"
+    )
 
     print("Creando el agente outbound...")
     outbound = retell_service.provision_outbound()
     _assert_agent_wiring("outbound", outbound)
-    print(f"  outbound listo: {outbound['agent_id']} · tools {outbound.get('tools')}")
+    _assert_published("outbound", outbound)
+    print(
+        f"  outbound listo: {outbound['agent_id']} · tools {outbound.get('tools')} "
+        f"· publicado v{outbound.get('published_version')}"
+    )
 
-    print("\nAmbos agentes traen end_call + update_lead_status + end_call_after_silence_ms.\n")
+    print("\nAmbos agentes traen end_call + update_lead_status + end_call_after_silence_ms,")
+    print("y quedan con una versión PUBLICADA — que es lo que el panel necesita para editar.\n")
     return 0
 
 
@@ -343,10 +528,26 @@ def cmd_twilio(args: argparse.Namespace) -> int:
             "primero: el número se ata a ese agente."
         )
 
+    # Optional on purpose: Retell gates outbound calls behind identity
+    # verification, so an install can legitimately be inbound-only for a while.
+    outbound_agent = env.get("RETELL_OUTBOUND_AGENT_ID")
+    if not outbound_agent:
+        print(
+            "\nAviso: no hay RETELL_OUTBOUND_AGENT_ID en .env. El número queda solo de "
+            "entrada; la devolución de llamadas no va a funcionar hasta atarlo."
+        )
+
     from app.services import twilio_service
 
     print("\nConectando el número de Twilio a Retell...")
-    result = twilio_service.connect_number_to_retell(inbound_agent_id=inbound_agent)
+    result = twilio_service.connect_number_to_retell(
+        inbound_agent_id=inbound_agent,
+        outbound_agent_id=outbound_agent or None,
+    )
+
+    bound_outbound = (result.get("outbound") or {}).get("outbound_agent_id")
+    if bound_outbound:
+        print(f"  agente outbound atado al número: {bound_outbound}")
 
     checks = result.get("verification", {}).get("checks", [])
     for check in checks:
@@ -396,15 +597,23 @@ def cmd_secret(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 _MODAL_TARGET = "app/main.py::modal_app"
+_MODAL_WORKER_TARGET = "app/worker.py::modal_app"
 _MODAL_URL_RE = re.compile(r"https://[a-z0-9-]+\.modal\.run", re.IGNORECASE)
 
 
 def cmd_deploy(args: argparse.Namespace) -> int:
-    """modal deploy app/main.py::modal_app — the ::modal_app suffix is mandatory.
+    """Deploy BOTH Modal apps — the backend and the outbound worker.
 
-    The image already packs sofia.config.yaml and prompts/ (see app/main.py); if
-    it did not, the post-call analysis would fail silently behind the webhook's
-    200. This only deploys; it does not touch that packing.
+    Two separate deploys, because they are two Modal apps: `app/main.py` serves
+    the tools and webhooks Retell calls, and `app/worker.py` is the hourly cron
+    that calls leads and no-shows back. Deploying only the first leaves the
+    outbound half of the product silently absent — nothing errors, the callbacks
+    simply never happen.
+
+    The ::modal_app suffix is mandatory on both (Modal otherwise looks for a
+    variable literally named `app`). The image already packs sofia.config.yaml
+    and prompts/ (see app/main.py); without that the post-call analysis fails
+    silently behind the webhook's 200.
     """
     print(f"\nDesplegando el backend: modal deploy {_MODAL_TARGET}")
     completed = _run(
@@ -431,6 +640,16 @@ def cmd_deploy(args: argparse.Namespace) -> int:
             "\nNo pude leer la URL del backend de la salida de Modal. Cópiala a mano a "
             "MODAL_URL en .env (y a BACKEND_URL del panel).\n"
         )
+
+    print(f"Desplegando el worker de outbound: modal deploy {_MODAL_WORKER_TARGET}")
+    worker = _run(
+        ["modal", "deploy", _MODAL_WORKER_TARGET],
+        cwd=_REPO_ROOT,
+        what="desplegar el worker de outbound a Modal",
+        capture=True,
+    )
+    print((worker.stdout or "") + (worker.stderr or ""))
+    print("Worker de devolución de llamadas desplegado (cron cada hora).\n")
     return 0
 
 
@@ -447,8 +666,33 @@ _PANEL_GENERATED = {
 }
 
 
-def _panel_env() -> dict[str, str]:
-    """Assemble the four production env vars, generating the two that are missing."""
+def ensure_dashboard_api_token() -> tuple[str, bool]:
+    """The shared panel<->backend token: generate it if absent. Returns (token, generated).
+
+    It is a generated secret, not a credential anyone can go look up, so asking
+    for it would be asking for something that does not exist. It has to live in
+    TWO places that must agree: the panel's Vercel env, and the Modal Secret the
+    backend reads (`/dashboard` rejects any request whose token does not match).
+    Generating it here — early, into .env — is what lets the normal `secret`
+    step carry it to Modal like any other key.
+    """
+    token = read_env().get("DASHBOARD_API_TOKEN")
+    if token:
+        return token, False
+    token = secrets.token_urlsafe(32)
+    upsert_env_var("DASHBOARD_API_TOKEN", token)
+    os.environ["DASHBOARD_API_TOKEN"] = token
+    print("  generé DASHBOARD_API_TOKEN y lo guardé en .env (va también al Modal Secret)")
+    return token, True
+
+
+def _panel_env() -> tuple[dict[str, str], bool]:
+    """Assemble the four production env vars, generating the three that are missing.
+
+    Returns the vars plus whether the shared API token had to be created, so the
+    caller knows the Modal Secret needs a refresh before the panel can talk to
+    the backend.
+    """
     root_env = read_env()
     local_env = read_env(_DASHBOARD_ENV_LOCAL)
 
@@ -458,13 +702,7 @@ def _panel_env() -> dict[str, str]:
             "No hay MODAL_URL en .env, así que el panel no sabe a qué backend apuntar. "
             "Corre `python scripts/setup.py deploy` primero."
         )
-    api_token = root_env.get("DASHBOARD_API_TOKEN")
-    if not api_token:
-        raise SetupError(
-            "Falta DASHBOARD_API_TOKEN en .env. Genéralo con "
-            "`python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"` y ponlo en "
-            ".env (va también en el Modal Secret) antes de desplegar el panel."
-        )
+    api_token, token_generated = ensure_dashboard_api_token()
 
     panel = {"BACKEND_URL": backend_url, "DASHBOARD_API_TOKEN": api_token}
     for key, length in _PANEL_GENERATED.items():
@@ -474,7 +712,7 @@ def _panel_env() -> dict[str, str]:
             upsert_env_var(key, value, path=_DASHBOARD_ENV_LOCAL)
             print(f"  generé {key} y lo guardé en dashboard/.env.local")
         panel[key] = value
-    return panel
+    return panel, token_generated
 
 
 def _set_vercel_env(key: str, value: str) -> None:
@@ -501,7 +739,13 @@ def cmd_vercel(args: argparse.Namespace) -> int:
     if not _DASHBOARD_DIR.exists():
         raise SetupError(f"No existe el directorio del panel en {_DASHBOARD_DIR}")
 
-    panel = _panel_env()
+    panel, token_generated = _panel_env()
+
+    if token_generated:
+        # The backend has to learn the token BEFORE the panel starts calling it,
+        # or every /dashboard request comes back 401 on a fresh install.
+        print("\nEl token del panel es nuevo: refresco el Modal Secret para que el backend lo tenga.")
+        cmd_secret(argparse.Namespace(force=True))
 
     print("\nEnlazando el proyecto de Vercel (necesitas `vercel login` hecho)...")
     _run(["vercel", "link", "--yes"], cwd=_DASHBOARD_DIR, what="enlazar el proyecto de Vercel")
@@ -549,13 +793,23 @@ def cmd_all(args: argparse.Namespace) -> int:
       - the backend's worker and dashboard read the Retell agent ids at runtime
         from the Secret, so `secret` runs a SECOND time after `provision` to bake
         in the ids it just created. Both secret writes are idempotent (--force).
+      - `validate` runs FIRST but tolerates the agents not existing yet — it
+        checks the Retell API key, not an agent id that only `provision` can
+        create. Demanding the id here is what used to deadlock the install.
+      - DASHBOARD_API_TOKEN is generated up front, before the first `secret`, so
+        the backend and the panel end up sharing the same value without a
+        third Secret write.
 
-    Order: validate -> secret -> deploy -> provision -> twilio -> secret.
+    Order: token -> validate -> secret -> deploy -> provision -> twilio ->
+    secret -> vercel.
     """
+    print("\n########## paso: token del panel ##########")
+    ensure_dashboard_api_token()
+
     steps: list[tuple[str, Callable[[argparse.Namespace], int]]] = [
         ("validate", cmd_validate),
         ("secret", cmd_secret),
-        ("deploy", cmd_deploy),
+        ("deploy (backend + worker)", cmd_deploy),
         ("provision", cmd_provision),
         ("twilio", cmd_twilio),
         ("secret (refresh con los agent ids)", cmd_secret),
@@ -611,6 +865,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_preflight = sub.add_parser(
+        "preflight", help="Paso 0: verifica Python 3.12, crea el venv e instala las deps."
+    )
+    p_preflight.add_argument(
+        "--auto-install",
+        action="store_true",
+        help="Si falta Python 3.12, instálalo con Homebrew en vez de solo decir cómo.",
+    )
+    p_preflight.set_defaults(func=cmd_preflight)
+
     p_interview = sub.add_parser("interview", help="Pide credenciales y llena .env + config.")
     p_interview.add_argument(
         "--skip-interview",
@@ -635,7 +899,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_secret.set_defaults(func=cmd_secret)
 
-    sub.add_parser("deploy", help="Despliega el backend a Modal.").set_defaults(func=cmd_deploy)
+    sub.add_parser(
+        "deploy", help="Despliega el backend Y el worker de outbound a Modal."
+    ).set_defaults(func=cmd_deploy)
     sub.add_parser("vercel", help="Despliega el panel a Vercel.").set_defaults(func=cmd_vercel)
 
     p_all = sub.add_parser("all", help="Corre los pasos 2->7 en orden.")
@@ -654,6 +920,8 @@ def main(argv: list[str] | None = None) -> int:
         args.force = False
     if not hasattr(args, "skip_interview"):
         args.skip_interview = False
+    if not hasattr(args, "auto_install"):
+        args.auto_install = False
     try:
         return args.func(args)
     except SetupError as exc:

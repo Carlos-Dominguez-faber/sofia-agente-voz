@@ -92,28 +92,41 @@ cd "<carpeta donde está este INSTALAR.md>"
 Si está en `~/Downloads`, pregúntale al usuario si lo mueves a un lugar fijo antes de
 seguir (una carpeta de trabajo estable, no la de Descargas).
 
-**2. Prerequisitos.** Verifica Python 3.12, crea el entorno virtual, instala las
-dependencias y confirma los CLIs. Dime qué falta:
+**2. Preflight de Python — el PRIMER paso, antes de cualquier otra cosa.** Modal solo
+soporta **Python 3.12** en este proyecto, y topar con eso a media instalación obliga a
+rehacer todo lo anterior. El instalador lo resuelve solo. Córrelo con el Python del
+sistema (es el único que hay todavía):
 
 ```bash
-python3.12 --version          # necesita 3.12.x (Modal no soporta más nuevo)
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e .              # instala las deps declaradas en pyproject.toml
+python3 scripts/setup.py preflight
+```
+
+Detecta la versión que hay, localiza Python 3.12, crea el `.venv` con 3.12 e instala las
+dependencias. Si **no** encuentra 3.12 se detiene y te da el comando exacto
+(`brew install python@3.12` en Mac). Pregúntale al usuario si lo instalas tú; si acepta:
+
+```bash
+python3 scripts/setup.py preflight --auto-install
+```
+
+Al terminar imprime la ruta del intérprete del entorno. **Usa ESE (`.venv/bin/python`)
+en todos los pasos siguientes**, o activa el entorno con
+`source .venv/bin/activate`.
+
+Después confirma los dos CLIs:
+
+```bash
 modal --version || pip install modal
 vercel --version || npm i -g vercel
 ```
 
-Cuando falten los CLIs de sesión, guía al usuario para que los haga **él** (abren el
+Cuando falten las sesiones, guía al usuario para que las haga **él** (abren el
 navegador):
 
 ```bash
 modal token new              # el usuario inicia sesión en Modal
 vercel login                 # el usuario inicia sesión en Vercel
 ```
-
-Si no existe `python3.12`, dile cómo instalarlo (`brew install python@3.12` en Mac) y
-detente hasta que esté.
 
 **3. Corre `/setup`.** Este es el comando estrella: hace **todo**. Explícale al usuario
 qué va a pasar antes de arrancarlo:
@@ -126,13 +139,18 @@ qué va a pasar antes de arrancarlo:
 - **GHL es referencia, no se crea.** Pide los IDs (Location, Calendar, Pipeline, Stage)
   de la subcuenta **ya armada** y los verifica. No crea calendario ni pipeline.
 - **Crea los dos agentes de Retell** (Sofía inbound + Sofía outbound) con `end_call` y
-  `update_lead_status` cableados desde el arranque.
-- **Conecta Twilio** por Elastic SIP Trunk.
+  `update_lead_status` cableados desde el arranque, y **publica** la primera versión de
+  cada uno (sin versión publicada, el panel de control no puede editarlos).
+- **Conecta Twilio** por Elastic SIP Trunk y ata al número **los dos** agentes.
 - **Crea el Modal Secret** `agente-voz-credentials` desde el `.env` (idempotente).
-- **Despliega el backend a Modal** empaquetando `sofia.config.yaml` y `prompts/` en la
-  imagen, con el sufijo `::modal_app`.
+- **Despliega a Modal el backend Y el worker de outbound**, empaquetando
+  `sofia.config.yaml` y `prompts/` en la imagen, con el sufijo `::modal_app`.
 - **Despliega el panel de control a Vercel** (sube las env vars y hace `vercel --prod`).
 - Al terminar, **imprime la URL del panel + la contraseña generada**.
+
+Lo que `/setup` **no** te pregunta, porque lo produce él: la URL del backend en Modal,
+los ids de los agentes de Retell y el token del panel. Si un paso te pide uno de esos,
+es que falta correr el paso que lo crea.
 
 ```bash
 /setup
