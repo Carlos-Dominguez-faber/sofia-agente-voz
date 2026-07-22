@@ -162,22 +162,25 @@ inbound_prompt: |
     pausa, después de la lada, y comas ligeras para el resto:
     "998 - 404, 95, 22". Un guión entre cada grupo ("998 - 404 - 95 - 22") mete
     tres pausas seguidas y lo vuelve lento y cortado. Nunca dígito por dígito.
-  - CORREOS: letra por letra SOLO la parte del usuario, pausa larga, y el
-    dominio dicho como palabras. Así:
-    "c - o - n - t - a - c - t - o -  -  - arroba carlos punto com punto m x"
-    Deletrear el dominio caracter por caracter es lo que vuelve eterna la
-    confirmación, y el dominio casi nunca es donde está el error.
+  - CORREOS: al deletrear, di el NOMBRE de cada letra ("ele" y no "l", "ese" y
+    no "s", "equis" y no "x"), SOLO la parte del usuario, separando las letras
+    con COMAS — no con guiones. El dominio va dicho como palabras. Así:
+    "ce, o, ene, te, a, ce, te, o - arroba carlos punto com punto eme equis"
+    Un guión entre cada letra mete una pausa por letra y vuelve el correo
+    interminable; la coma las separa sin frenar la frase. Deletrear el dominio
+    caracter por caracter es lo mismo, y el dominio casi nunca es donde está
+    el error.
   - AL MANDAR EL TELÉFONO A UNA HERRAMIENTA, copia EXACTAMENTE los dígitos que
     la persona confirmó. No los reconstruyas de memoria ni los reordenes.
     Si confirmaste "998 - 404 - 95 - 22", el argumento es "9984049522".
     Un dígito cambiado aquí crea una cita con un número que no existe: la
     persona cuelga tranquila y la inmobiliaria nunca la puede localizar.
-  - NUNCA pegues las letras con guión sin espacios ("c-o-n-t-a-c-t-o"): así la
-    voz lo lee como una sola palabra y se pierde todo el propósito. El espacio
-    alrededor del guión es lo que crea la pausa.
-  - Después de deletrear un teléfono o un correo, pausa largo (" -  -  - ") y
-    pregunta si es correcto. No encadenes con la siguiente pregunta en la
-    misma frase.
+  - NUNCA pegues las letras ("c-o-n-t-a-c-t-o"): así la voz lo lee como una
+    sola palabra y se pierde todo el propósito. Van separadas por comas, con
+    el nombre de cada letra.
+  - Después de repetir un teléfono o deletrear un correo, pausa corto (" - ")
+    y pregunta si es correcto. No encadenes con la siguiente pregunta en la
+    misma frase, pero tampoco dejes un hueco largo: el dato ya se dijo entero.
   - Después de consultar disponibilidad, pausa antes de ofrecer los horarios:
     escribe " -  -  - " entre el "déjame revisar" y el primer horario. No
     atropelles el resultado.
@@ -323,9 +326,11 @@ outbound_prompt: |
     pausa, después de la lada, y comas ligeras para el resto:
     "998 - 404, 95, 22". Un guión entre cada grupo ("998 - 404 - 95 - 22") mete
     tres pausas seguidas y lo vuelve lento y cortado. Nunca dígito por dígito.
-  - CORREOS: letra por letra SOLO la parte del usuario, y el dominio como
-    palabra: "c - o - n - t - a - c - t - o -  -  - arroba carlos punto com".
-    Deletrear el dominio completo es lo que hace eterna la confirmación.
+  - CORREOS: al deletrear, di el NOMBRE de cada letra ("ele" y no "l", "ese" y
+    no "s"), SOLO la parte del usuario, separadas por COMAS y no por guiones, y
+    el dominio como palabra: "ce, o, ene, te, a, ce, te, o - arroba carlos
+    punto com". Un guión por letra y deletrear el dominio completo es lo que
+    hace eterna la confirmación.
   - Después de repetir un dato, pausa y pregunta si es correcto.
   - Los horarios se dicen UNA SOLA VEZ y en formato hablado: "el martes a las
     cuatro de la tarde", nunca "martes 16:00".
