@@ -100,8 +100,10 @@ Modal Cron (cada hora) ─▶ lee leads pendientes y no-shows en GHL
 
 ### Otros valores de referencia
 
-- **Voz:** ElevenLabs, `es-MX`, tono cálido · **speak-during-execution ON** (habla mientras
-  consulta disponibilidad, evita el silencio incómodo).
+- **Voz:** voz de plataforma de Retell, **`retell-Andrea`**, femenina mexicana, a
+  `voice_speed` 0.9 · idioma **`es-419`** (español de Latinoamérica — **`es-MX` no es un
+  valor válido en Retell**) · **speak-during-execution ON** (habla mientras consulta
+  disponibilidad, evita el silencio incómodo).
 - **GHL API:** base `https://services.leadconnectorhq.com` · header `Version: 2021-07-28`.
 - **Número Twilio local MX:** ~$6.25/mes · entrante ~$0.01/min.
 - **Toll-free +52 800:** ~$30/mes · entrante ~$0.216/min.
@@ -122,8 +124,8 @@ Dos archivos, dos naturalezas distintas. **No mezclar.**
 Regla dura: **si un valor identifica al negocio, va al YAML; si da acceso a un servicio, va al
 `.env`.** Nunca hardcodear credenciales en el código.
 
-> **Estado actual:** `sofia.config.yaml` todavía no existe. Se genera en el siguiente paso,
-> cuando esté la planeación — hasta entonces no hay contenido real que ponerle.
+> **Estado actual:** `sofia.config.yaml` ya existe y está precargado con la clínica ancla.
+> Lo edita `/setup` (entrevista) o `/customize`; a mano solo si sabes qué tocas.
 
 ---
 
@@ -165,29 +167,34 @@ ANTHROPIC_API_KEY=
 
 ---
 
-## 6. Estructura de archivos (objetivo)
+## 6. Estructura de archivos
 
 ```
 agente-voz-ghl/
-├── BRIEF.md · BRIEF-TECNICO.md · CLAUDE.md
-├── .gitignore · .env.example · .env    # ← lo único que existe hoy, además de los briefs
+├── BRIEF.md · BRIEF-TECNICO.md · CLAUDE.md · INSTALAR.md
+├── .gitignore · .env.example · .env
 ├── sofia.config.yaml          # datos del negocio (se versiona)
 ├── pyproject.toml
 ├── prompts/
 │   ├── dental.yaml            # ← nicho ancla (Sonrisa Perfecta)
 │   └── inmobiliaria.yaml · abogados.yaml · gimnasio.yaml · restaurante.yaml
 ├── app/
-│   ├── main.py                # FastAPI sobre Modal: tools + webhooks
-│   ├── config.py              # carga sofia.config.yaml + template de industria
-│   ├── outbound_worker.py     # cron horario: leads/no-shows → llamada
+│   ├── main.py                # FastAPI sobre Modal: tools + webhooks (::modal_app)
+│   ├── worker.py              # app de Modal aparte: cron horario de outbound (::modal_app)
+│   ├── dashboard_api.py       # endpoints /dashboard del panel · auth.py el token
 │   ├── services/
 │   │   ├── ghl_service.py     # ★ el corazón: contactos + calendario + oportunidades + tags
+│   │   ├── ghl_read_service.py · dashboard_service.py    # lectura para el panel
 │   │   ├── retell_service.py · twilio_service.py · anthropic_service.py
-│   └── webhooks/
-│       └── retell_handler.py · twilio_handler.py
-├── scripts/                   # setup · test_services · customize · status · validate
-└── dashboard/                 # Next.js (más adelante — ver sección 8)
+│   │   └── prompt_guard.py · prompt_history.py · call_parsing.py
+├── scripts/                   # setup · validate · test_services · customize · status
+├── tests/
+└── dashboard/                 # Next.js — el panel de control (ver sección 8)
 ```
+
+> **Son DOS apps de Modal, no una.** `app/main.py` y `app/worker.py` se despliegan por
+> separado, ambas con el sufijo `::modal_app`. Desplegar solo la primera deja el outbound
+> ausente en silencio: nada falla, las devoluciones de llamada simplemente nunca ocurren.
 
 ---
 
@@ -221,19 +228,25 @@ Global Timing & Pacing Rules · Safety & Scope Guardrails · Objection Handling.
 
 ---
 
-## 8. Dashboard — en construcción (rama `dashboard`)
+## 8. El panel de control (Next.js, en `dashboard/`) — en producción
 
-Un **dashboard ligero en Next.js** para el cliente. Se construye por fases: primero los
-endpoints de lectura en `app/`, después el panel, al final la documentación de entrega.
+Un **panel de control** en Next.js para el cliente, desplegado en Vercel. Nació como un
+dashboard de solo lectura; **ya no lo es**. Hoy además de mostrar, **cambia a Sofía en
+vivo**: voz, comportamiento y prompt, publicados al número real sin entrar a Retell.
 
-Lo importante: **el dashboard NO tiene base de datos propia.** Solo **LEE** de dos fuentes —
-**GoHighLevel** (métricas, contactos, citas, funnel) y **el backend en Modal** (llamadas,
-transcripciones, estado de servicios).
+Lo que **sigue siendo cierto**: **el panel NO tiene base de datos propia.** Todo lo que
+muestra lo lee de dos fuentes — **GoHighLevel** (métricas, contactos, citas, funnel) y **el
+backend en Modal** (llamadas, transcripciones, grabaciones, estado de servicios).
 
-Qué mostrará: métricas (llamadas totales, citas agendadas por Sofía, tasa de éxito, duración
-promedio), llamadas recientes con transcripción y resumen, temperatura de leads y funnel,
-edición del prompt del agente sin entrar a Retell, disparo de una llamada outbound manual y
-branding por cliente.
+Qué hace:
+
+- **Lee:** métricas (llamadas totales, citas agendadas por Sofía, tasa de éxito, duración
+  promedio), llamadas recientes con transcripción y resumen, **grabación reproducible** de
+  cada llamada, temperatura de leads y funnel.
+- **Escribe (publicado en vivo):** voz y velocidad, comportamiento, y el prompt del agente —
+  todo vía `publish_agent_change`, que **publica**, no deja borradores. Un cambio guardado
+  pero no publicado es el bug V07/V09: el número sigue hablando con la versión anterior.
+- **Dispara** una llamada outbound manual, y lleva branding por cliente.
 
 > **Costos, no.** Se consideraron y quedaron fuera. Retell expone su costo por llamada, pero
 > Twilio y Anthropic se facturan aparte y nadie los agrega hoy: una tarjeta de "costos" que
@@ -247,10 +260,12 @@ branding por cliente.
 
 - Los endpoints devuelven **JSON limpio y estable**, consumible por un frontend, no solo por
   Retell.
-- La lógica de negocio vive en `app/services/`, **no** en los handlers — para que el
-  dashboard pueda reusarla sin duplicar.
-- Los endpoints de **lectura** viven en `app/dashboard_api.py`, bajo `/dashboard` y detrás de
-  un token compartido. Los de acción no se tocan: Retell depende de ellos en vivo.
+- La lógica de negocio vive en `app/services/`, **no** en los handlers — para que el panel
+  pueda reusarla sin duplicar.
+- Los endpoints del panel viven en `app/dashboard_api.py`, bajo `/dashboard` y detrás del
+  token compartido `DASHBOARD_API_TOKEN` (el mismo valor en el Modal Secret y en Vercel; si
+  no coinciden, todo el panel responde 401). Los endpoints que usa Retell no se tocan desde
+  ahí: depende de ellos en vivo.
 - No introducir estado local que el dashboard tendría que sincronizar. **GHL sigue siendo la
   fuente de la verdad.** Hay **una sola excepción deliberada**, `app/services/prompt_history.py`:
   guarda la versión previa del prompt para poder revertir en un clic si un cliente borra los
@@ -258,11 +273,11 @@ branding por cliente.
 
 ---
 
-## 9. Skills previstas
+## 9. Skills (existen, en `.claude/commands/`)
 
 | Comando      | Qué hace                                                                                                                                                                                                                                              |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/setup`     | Entrevista interactiva (para no-devs) → llena `sofia.config.yaml`, pide credenciales, **valida cada API en vivo**, crea los agentes de Retell, conecta Twilio, referencia calendario y pipeline de GHL, despliega a Modal. Admite `--skip-interview`. |
+| `/setup`     | **Preflight de Python 3.12** → entrevista interactiva (para no-devs) → llena `sofia.config.yaml`, **valida cada API en vivo**, despliega backend + worker a Modal, crea Y publica los agentes de Retell, conecta Twilio (inbound + outbound), despliega el panel a Vercel. Admite `--skip-interview`. |
 | `/test`      | Verifica 5 servicios: Retell · Twilio · GHL · Backend (health de Modal) · Anthropic. Los errores **siempre** vienen con la solución, nunca con un código crudo.                                                                                       |
 | `/customize` | Ajusta prompt, campos y tags de GHL, horario de outbound, datos del negocio o voz — sin romper pacing ni guardrails.                                                                                                                                  |
 | `/status`    | Estado en vivo de todos los servicios y la última llamada.                                                                                                                                                                                            |
@@ -286,7 +301,9 @@ acceso al sistema de citas: primero las manos, luego la voz.
 
 ## 11. Lo que NO es el foco
 
-- **El dashboard.** Capa de presentación: solo lee y presenta. No invertir tiempo de build ahí.
+- **Agrandar el panel.** Ya está entregado y en producción. Lo que muestra y lo que edita
+  está cerrado a propósito: cada control nuevo es una forma nueva de que un cliente rompa a
+  Sofía. El trabajo vive en el agente y en el instalador, no ahí.
 - **Soportar varios CRMs en paralelo.** GHL reemplaza al CRM y al calendario, no convive con otros.
 - **Optimizar costos antes de que funcione.** Primero que agende bien; después se afina.
 
@@ -318,3 +335,22 @@ acceso al sistema de citas: primero las manos, luego la voz.
   diseño (para que Retell no reintente), así que nada sale a la superficie y parece que
   simplemente no se guardó el resumen. Cada vez que agregues un archivo de datos nuevo al
   proyecto, agrégalo también a la imagen.
+- **Un agente recién creado NO tiene versión publicada.** `agent.create` lo deja en un
+  borrador v0, y el panel edita ramificando desde la última versión *publicada*: sin ese
+  piso, el panel arranca roto con `source_unavailable`. Por eso `provision` publica la v0
+  de cada agente. Vale para cualquier flujo que cree agentes nuevos.
+- **Importar el número ata solo el inbound.** El binding outbound es una escritura aparte
+  sobre el mismo número (`bind_outbound_agent`). Sin ella el worker marca pero Retell no
+  tiene agente que atender la llamada que acaba de colocar.
+
+### Del instalador (`scripts/setup.py`)
+
+- **Nada que el instalador produce se le pregunta al usuario.** `MODAL_URL`, los agent ids
+  y `DASHBOARD_API_TOKEN` no existen antes del paso que los crea. Pedirlos en la entrevista
+  es pedir algo que nadie puede tener todavía.
+- **La validación va antes que el provisioning, así que no puede exigir agentes.**
+  `validate` prueba la **API key** de Retell cuando aún no hay agent id. Exigir el id ahí
+  crea un huevo-y-gallina que mata la instalación antes de empezar.
+- **Python 3.12 se verifica de PRIMERO.** Modal no soporta más nuevo, y descubrirlo a media
+  instalación obliga a rehacer todo lo anterior bajo otro intérprete. `preflight` corre con
+  el Python del sistema (puede ser 3.14) y por eso no importa nada de `app/`: solo stdlib.
