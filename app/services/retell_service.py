@@ -698,7 +698,30 @@ def update_outbound_llm(
     }
 
 
-def provision_outbound(*, persist: bool = True) -> dict[str, Any]:
+def publish_initial_version(agent_id: str) -> dict[str, Any]:
+    """Publish a freshly created agent so it HAS a published version.
+
+    A `create` leaves the agent on an unpublished draft (v0). Everything that
+    reads or edits the live agent — `_latest_published_version`, and therefore
+    the whole control panel — refuses to work without a published baseline
+    ("has no published version to base a change on"). Provisioning has to leave
+    that baseline behind, or the panel starts broken on a brand-new install.
+
+    Idempotent: if a published version already exists, nothing is published.
+    """
+    versions = _versions_list(agent_id)
+    published = [int(v["version"]) for v in versions if v.get("is_published")]
+    if published:
+        return {"agent_id": agent_id, "published_version": max(published), "created": False}
+
+    # Publish the newest existing version — v0 on a fresh agent.
+    target = max((int(v["version"]) for v in versions), default=0)
+    _client().agent.publish(agent_id, version=target)
+    LOG.info("Published initial version v%s of agent %s", target, agent_id)
+    return {"agent_id": agent_id, "published_version": target, "created": True}
+
+
+def provision_outbound(*, persist: bool = True, publish: bool = True) -> dict[str, Any]:
     """Create the outbound LLM and agent, and record both ids in .env."""
     try:
         llm = create_outbound_llm()
@@ -710,7 +733,15 @@ def provision_outbound(*, persist: bool = True) -> dict[str, Any]:
         _upsert_env_var("RETELL_OUTBOUND_LLM_ID", llm["llm_id"])
         _upsert_env_var("RETELL_OUTBOUND_AGENT_ID", agent["agent_id"])
 
-    return {**agent, "model": llm["model"], "temperature": llm["temperature"], "tools": llm["tools"]}
+    published = publish_initial_version(agent["agent_id"]) if publish else None
+
+    return {
+        **agent,
+        "model": llm["model"],
+        "temperature": llm["temperature"],
+        "tools": llm["tools"],
+        "published_version": (published or {}).get("published_version"),
+    }
 
 
 def _upsert_env_var(key: str, value: str) -> None:
@@ -738,7 +769,7 @@ def _upsert_env_var(key: str, value: str) -> None:
     LOG.info("Wrote %s to .env", key)
 
 
-def provision_inbound(*, persist: bool = True) -> dict[str, Any]:
+def provision_inbound(*, persist: bool = True, publish: bool = True) -> dict[str, Any]:
     """Creates the LLM and the agent, and records both ids in .env."""
     try:
         llm = create_inbound_llm()
@@ -750,7 +781,15 @@ def provision_inbound(*, persist: bool = True) -> dict[str, Any]:
         _upsert_env_var("RETELL_INBOUND_LLM_ID", llm["llm_id"])
         _upsert_env_var("RETELL_INBOUND_AGENT_ID", agent["agent_id"])
 
-    return {**agent, "model": llm["model"], "temperature": llm["temperature"], "tools": llm["tools"]}
+    published = publish_initial_version(agent["agent_id"]) if publish else None
+
+    return {
+        **agent,
+        "model": llm["model"],
+        "temperature": llm["temperature"],
+        "tools": llm["tools"],
+        "published_version": (published or {}).get("published_version"),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -1258,6 +1297,28 @@ def start_outbound_call(to_number: str, *, from_number: str | None = None) -> di
         "to_number": to_number,
         "call_status": result.get("call_status"),
     }
+
+
+def inbound_agent_configured() -> bool:
+    """True when .env already carries an inbound agent id (i.e. provision has run)."""
+    _load_env_file()
+    return bool((os.environ.get("RETELL_INBOUND_AGENT_ID") or "").strip())
+
+
+def test_api_key() -> dict[str, Any]:
+    """Prove the API key itself works, WITHOUT assuming any agent exists yet.
+
+    On a fresh install the agents do not exist until `provision` creates them,
+    and `provision` runs after validation. A validator that demands an agent id
+    turns the install into a chicken-and-egg deadlock, so key-only is the check
+    that can honestly run first.
+    """
+    client = _client()
+    try:
+        agents = client.agent.list()
+    except TypeError:  # older SDKs want an explicit page size
+        agents = client.agent.list(limit=1)
+    return {"ok": True, "agent_count": len(_items_of(agents))}
 
 
 def test_connection() -> dict[str, Any]:

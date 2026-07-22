@@ -484,11 +484,18 @@ def connect_number_to_retell(
     prefix: str = DEFAULT_TRUNK_PREFIX,
     number: str | None = None,
     inbound_agent_id: str | None = None,
+    outbound_agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Wire Twilio to Retell end to end. Safe to re-run for the next client.
 
     Returns the verification result, not the create responses — what matters is
     the state that is actually live, not the calls that were accepted.
+
+    Importing the number binds INBOUND only. The outbound binding is a separate
+    write on the same number, and skipping it leaves the number pointing at
+    whatever outbound agent was there before (or none) — which is exactly what
+    `verify_connection` then reports as a failure. So the outbound agent is
+    bound here, right after the import, whenever one is configured.
     """
     target = number or phone_number()
     LOG.info("Connecting %s to Retell", target)
@@ -503,6 +510,16 @@ def connect_number_to_retell(
         inbound_agent_id=inbound_agent_id,
     )
 
+    # Inbound-only installs are legitimate (Retell gates outbound behind identity
+    # verification), so a missing outbound agent id is skipped, never fatal.
+    _load_env_file()
+    outbound_target = outbound_agent_id or (os.environ.get("RETELL_OUTBOUND_AGENT_ID") or "").strip()
+    if outbound_target:
+        outbound = bind_outbound_agent(number=target, outbound_agent_id=outbound_target)
+    else:
+        outbound = {"phone_number": target, "outbound_agent_id": None, "skipped": True}
+        LOG.warning("No outbound agent configured; %s stays inbound-only", target)
+
     verification = verify_connection(number=target)
     return {
         "trunk": trunk,
@@ -510,6 +527,7 @@ def connect_number_to_retell(
         "acl": acl,
         "number": attached,
         "retell": imported,
+        "outbound": outbound,
         "verification": verification,
         "agent": agent_publication_status(inbound_agent_id),
     }
