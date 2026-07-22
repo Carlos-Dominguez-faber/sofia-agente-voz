@@ -732,6 +732,13 @@ def provision_outbound(*, persist: bool = True, publish: bool = True) -> dict[st
     if persist:
         _upsert_env_var("RETELL_OUTBOUND_LLM_ID", llm["llm_id"])
         _upsert_env_var("RETELL_OUTBOUND_AGENT_ID", agent["agent_id"])
+        # Seed os.environ too: a later step in the same `all` run (the Twilio
+        # binding check) reads the agent id from os.environ, and the env loader
+        # never overrides a var already there. Writing only the file leaves the
+        # verify comparing the new binding against the id loaded at startup. Same
+        # reason `deploy` sets MODAL_URL in-process.
+        os.environ["RETELL_OUTBOUND_LLM_ID"] = llm["llm_id"]
+        os.environ["RETELL_OUTBOUND_AGENT_ID"] = agent["agent_id"]
 
     published = publish_initial_version(agent["agent_id"]) if publish else None
 
@@ -780,6 +787,10 @@ def provision_inbound(*, persist: bool = True, publish: bool = True) -> dict[str
     if persist:
         _upsert_env_var("RETELL_INBOUND_LLM_ID", llm["llm_id"])
         _upsert_env_var("RETELL_INBOUND_AGENT_ID", agent["agent_id"])
+        # Seed os.environ too — see provision_outbound: the Twilio verify reads
+        # the expected agent id from os.environ within this same run.
+        os.environ["RETELL_INBOUND_LLM_ID"] = llm["llm_id"]
+        os.environ["RETELL_INBOUND_AGENT_ID"] = agent["agent_id"]
 
     published = publish_initial_version(agent["agent_id"]) if publish else None
 
