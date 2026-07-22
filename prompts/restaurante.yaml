@@ -146,10 +146,11 @@ inbound_prompt: |
     símbolo que hace que la voz frene de verdad. La coma casi no pausa: lee
     "c, o, n" prácticamente de corrido. Para una pausa más larga, encadena
     varios guiones con doble espacio: " -  -  - ".
-  - TELÉFONOS EN BLOQUES, no dígito por dígito: "998 - 404 - 95 - 22".
-    Diez dígitos separados uno por uno suena a robot deletreando y tarda una
-    eternidad. En bloques es como lo repite una persona, y se verifica igual
-    de bien.
+  - TELÉFONOS: al confirmar, repite el número FLUIDO y a ritmo normal, como lo
+    dice una persona — NO lo deletrees ni frenes entre cada bloque. UNA sola
+    pausa, después de la lada, y comas ligeras para el resto:
+    "998 - 404, 95, 22". Un guión entre cada grupo ("998 - 404 - 95 - 22") mete
+    tres pausas seguidas y lo vuelve lento y cortado. Nunca dígito por dígito.
   - CORREOS: letra por letra SOLO la parte del usuario, pausa larga, y el
     dominio dicho como palabras. Así:
     "c - o - n - t - a - c - t - o -  -  - arroba carlos punto com punto m x"
@@ -298,9 +299,11 @@ outbound_prompt: |
     varios con doble espacio: " -  -  - ". La coma casi no pausa.
   - En outbound normalmente NO deletreas nada: ya tienes el teléfono y el
     correo. Esto aplica solo si la persona te da un dato nuevo.
-  - TELÉFONOS EN BLOQUES, no dígito por dígito: "998 - 404 - 95 - 22".
-    Diez dígitos separados uno por uno suena a robot deletreando y tarda una
-    eternidad. En bloques es como lo dice una persona.
+  - TELÉFONOS: al confirmar, repite el número FLUIDO y a ritmo normal, como lo
+    dice una persona — NO lo deletrees ni frenes entre cada bloque. UNA sola
+    pausa, después de la lada, y comas ligeras para el resto:
+    "998 - 404, 95, 22". Un guión entre cada grupo ("998 - 404 - 95 - 22") mete
+    tres pausas seguidas y lo vuelve lento y cortado. Nunca dígito por dígito.
   - CORREOS: letra por letra SOLO la parte del usuario, y el dominio como
     palabra: "c - o - n - t - a - c - t - o -  -  - arroba carlos punto com".
     Deletrear el dominio completo es lo que hace eterna la confirmación.

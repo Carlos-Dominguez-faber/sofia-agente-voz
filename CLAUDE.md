@@ -208,7 +208,7 @@ agente-voz-ghl/
 
 ### De pacing (lo que hace que no suene a robot)
 
-- Teléfonos **dígito a dígito**, confirmando al final. Correos **deletreados**.
+- Teléfonos **en bloques y fluido al confirmar** (nunca dígito por dígito ni una pausa entre cada grupo). Correos **deletreados** solo la parte del usuario.
 - **Pausa de 3 segundos** tras consultar disponibilidad, antes de ofrecer horarios.
 - Horarios dichos **una sola vez**, en formato hablado ("el martes a las cuatro de la tarde").
 - **Precisión y claridad por encima de velocidad.** Cuando dude, frena.
