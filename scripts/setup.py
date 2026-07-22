@@ -835,6 +835,13 @@ def cmd_all(args: argparse.Namespace) -> int:
     Order: token -> validate -> secret -> deploy -> provision -> twilio ->
     secret -> vercel.
     """
+    # The Secret is replaced wholesale on every run — the whole .env is uploaded,
+    # so a full replace is correct AND it makes `all` safe to re-run ("continúa el
+    # setup"). Without this, the second run dies at the first secret step with
+    # "Secret already exists"; on a fresh install the secret does not exist yet, so
+    # forcing is harmless there too.
+    args.force = True
+
     print("\n########## paso: token del panel ##########")
     ensure_dashboard_api_token()
 
