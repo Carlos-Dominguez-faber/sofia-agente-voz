@@ -65,3 +65,25 @@ nada a mano) antes de re-grabar el V11.
 - Re-verificar corriendo `/setup` (o el "instálalo") end-to-end en un clon limpio → número suena +
   panel arriba SIN librar nada a mano.
 - Recién ahí re-grabar el V11 sobre un `/setup` sólido.
+
+---
+
+## Bugs 8-11 — los que destapó el e2e en un clon limpio (2026-07-22)
+
+La verificación end-to-end en un clon limpio (`sofia-e2e`) sobre las mismas cuentas corrió el
+`/setup` de verdad y destapó cuatro bugs más — **todos del escenario "continúa el setup" / re-run**,
+que un comprador toca en cuanto se le corta la instalación. El install cerró VERDE tras arreglarlos
+y una llamada real agendó cita en GHL.
+
+| # | Síntoma | Arreglo | Commit |
+| - | ------- | ------- | ------ |
+| 8 | El venv quedaba "listo" pero moría en `secret` con "No encontré modal": el preflight instalaba la **librería** de Modal, no el **CLI** (`modal` es dep opcional `[deploy]`). | `preflight` instala `.[deploy]` y verifica que el CLI aterrizó en el venv. | `696d5ca` |
+| 9 | `secret`/`deploy` llamaban `modal` **pelón** (buscándolo en el PATH). Bajo `.venv/bin/python` sin activar el venv — flujo que `INSTALAR.md` permite — no está en PATH. | `_modal_cmd()`: resuelve el `modal` del venv y cae al PATH solo si no está. | `b2b1ab5` |
+| 10 | Re-correr `all` moría con "Secret already exists": `all` no pasaba `--force` al `secret` por default, aunque su docstring prometía que era idempotente. | `cmd_all` fuerza el Secret (se sube el `.env` entero; reemplazar es correcto y hace `all` re-ejecutable). | `64d31be` |
+| 11 | `twilio` fallaba la verificación: `bound=<agentes nuevos>` vs `expected=<agentes viejos>`. `provision` escribía los agent ids al `.env` pero **no a `os.environ`**, y el verificador lee de `os.environ`. | `provision_*` siembra `os.environ` además del `.env` (igual que el fix de `MODAL_URL` en `deploy`). | `34e9f2e` |
+
+**Lección transversal:** en una sola corrida de `all`, un paso que escribe al `.env` a mitad del
+proceso NO es visto por los pasos siguientes, porque el loader de env nunca pisa un valor ya cargado
+en `os.environ`. Cualquier valor generado a mitad de `all` (URL de Modal, agent ids, token) tiene que
+escribirse a `os.environ` además del archivo. Y `all` debe ser idempotente de punta a punta para
+soportar el "continúa el setup".
