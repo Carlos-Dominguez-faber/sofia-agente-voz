@@ -193,11 +193,16 @@ _VENV_DIR = _REPO_ROOT / ".venv"
 _BREW_INSTALL = "brew install python@3.12"
 
 
-def _venv_python() -> Path:
-    """Path to the interpreter inside the project venv (POSIX and Windows)."""
+def _venv_bin(name: str) -> Path:
+    """Path to an executable inside the project venv (POSIX and Windows)."""
     if os.name == "nt":
-        return _VENV_DIR / "Scripts" / "python.exe"
-    return _VENV_DIR / "bin" / "python"
+        return _VENV_DIR / "Scripts" / f"{name}.exe"
+    return _VENV_DIR / "bin" / name
+
+
+def _venv_python() -> Path:
+    """Path to the interpreter inside the project venv."""
+    return _venv_bin("python")
 
 
 def _interpreter_version(executable: Path | str) -> tuple[int, int] | None:
@@ -300,7 +305,12 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     else:
         print(f"El entorno en {_VENV_DIR} ya corre Python 3.12.")
 
-    print("Instalando las dependencias del proyecto (pip install -e .)...")
+    # `.[deploy]` and not `.`: modal is an optional dependency, and the very next
+    # steps (`secret`, `deploy`) shell out to the `modal` CLI. Installing the
+    # base project alone leaves a venv that looks ready and dies one step later
+    # with "No encontré `modal`" — exactly the kind of manual patch-up the
+    # preflight exists to remove.
+    print('Instalando las dependencias del proyecto (pip install -e ".[deploy]")...')
     _ensure_pip(_venv_python())
     _run(
         [str(_venv_python()), "-m", "pip", "install", "--quiet", "--upgrade", "pip"],
@@ -308,10 +318,19 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         what="actualizar pip",
     )
     _run(
-        [str(_venv_python()), "-m", "pip", "install", "--quiet", "-e", "."],
+        [str(_venv_python()), "-m", "pip", "install", "--quiet", "-e", ".[deploy]"],
         cwd=_REPO_ROOT,
         what="instalar las dependencias del proyecto",
     )
+
+    modal_cli = _venv_bin("modal")
+    if not modal_cli.exists():
+        raise SetupError(
+            "Las dependencias quedaron instaladas pero no veo el CLI de `modal` en "
+            f"{modal_cli}. Instálalo dentro del entorno con "
+            f"`{_venv_python()} -m pip install modal` y vuelve a correr este paso."
+        )
+    print(f"CLI de Modal listo en el entorno: {modal_cli}")
 
     print("\n" + "=" * 60)
     print("PREFLIGHT OK — usa ESTE intérprete para todos los pasos siguientes:")

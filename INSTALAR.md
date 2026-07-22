@@ -102,7 +102,8 @@ python3 scripts/setup.py preflight
 ```
 
 Detecta la versión que hay, localiza Python 3.12, crea el `.venv` con 3.12 e instala las
-dependencias. Si **no** encuentra 3.12 se detiene y te da el comando exacto
+dependencias — **incluido el CLI de Modal**, que los pasos siguientes necesitan. Si **no**
+encuentra 3.12 se detiene y te da el comando exacto
 (`brew install python@3.12` en Mac). Pregúntale al usuario si lo instalas tú; si acepta:
 
 ```bash
@@ -113,10 +114,9 @@ Al terminar imprime la ruta del intérprete del entorno. **Usa ESE (`.venv/bin/p
 en todos los pasos siguientes**, o activa el entorno con
 `source .venv/bin/activate`.
 
-Después confirma los dos CLIs:
+El CLI de Modal ya viene con el entorno; el de Vercel es npm y va aparte:
 
 ```bash
-modal --version || pip install modal
 vercel --version || npm i -g vercel
 ```
 

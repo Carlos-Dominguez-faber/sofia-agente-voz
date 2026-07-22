@@ -65,8 +65,9 @@ necesita el Secret; el `provision` necesita la `MODAL_URL` que imprime el
 
 0. **`preflight`** — el PRIMER paso, siempre, antes de la entrevista. Detecta la
    versión de Python del sistema, localiza (o instala) **3.12** —Modal no
-   soporta más nuevo—, crea el `.venv` con 3.12 e instala las dependencias.
-   Córrelo con el Python del sistema, que es el único que hay todavía:
+   soporta más nuevo—, crea el `.venv` con 3.12 e instala las dependencias,
+   **incluido el CLI de `modal`** que usan `secret` y `deploy`. Córrelo con el
+   Python del sistema, que es el único que hay todavía:
 
    ```bash
    python3 scripts/setup.py preflight
