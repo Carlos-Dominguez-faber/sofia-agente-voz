@@ -205,6 +205,19 @@ def _venv_python() -> Path:
     return _venv_bin("python")
 
 
+def _modal_cmd() -> str:
+    """The Modal CLI — prefer the project venv, fall back to PATH.
+
+    `secret` and `deploy` shell out to `modal`. When the installer runs under
+    `.venv/bin/python` WITHOUT the venv activated (which INSTALAR.md explicitly
+    allows), a bare `modal` is not on PATH even though preflight installed it
+    into the venv. Resolve it from the venv when it is there, so the step does
+    not die with "No encontré modal" on an otherwise correct install.
+    """
+    cli = _venv_bin("modal")
+    return str(cli) if cli.exists() else "modal"
+
+
 def _interpreter_version(executable: Path | str) -> tuple[int, int] | None:
     """(major, minor) of an interpreter, or None if it cannot be run."""
     try:
@@ -599,7 +612,7 @@ def cmd_secret(args: argparse.Namespace) -> int:
     if not env:
         raise SetupError("El .env no tiene valores que subir. Corre la entrevista primero.")
 
-    command = ["modal", "secret", "create", _MODAL_SECRET_NAME]
+    command = [_modal_cmd(), "secret", "create", _MODAL_SECRET_NAME]
     command += [f"{key}={value}" for key, value in env.items()]
     if args.force:
         command.append("--force")
@@ -636,7 +649,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     """
     print(f"\nDesplegando el backend: modal deploy {_MODAL_TARGET}")
     completed = _run(
-        ["modal", "deploy", _MODAL_TARGET],
+        [_modal_cmd(), "deploy", _MODAL_TARGET],
         cwd=_REPO_ROOT,
         what="desplegar el backend a Modal",
         capture=True,
@@ -662,7 +675,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
 
     print(f"Desplegando el worker de outbound: modal deploy {_MODAL_WORKER_TARGET}")
     worker = _run(
-        ["modal", "deploy", _MODAL_WORKER_TARGET],
+        [_modal_cmd(), "deploy", _MODAL_WORKER_TARGET],
         cwd=_REPO_ROOT,
         what="desplegar el worker de outbound a Modal",
         capture=True,
