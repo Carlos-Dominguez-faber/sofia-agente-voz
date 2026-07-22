@@ -8,6 +8,15 @@
 > Léelo completo antes de pegarlo. La sección de **prerrequisitos** trae un paso
 > que, si te lo saltas, hace que nada compile.
 
+> **Nota — en el repo final ya no tienes que construirlo.** El dashboard **ya
+> viene hecho** dentro de este repo, en `dashboard/`, y el instalador
+> (`INSTALAR.md` → `/setup`) lo despliega a Vercel junto con el backend a Modal.
+> Este documento queda como el **registro de cómo se produjo**: para entenderlo,
+> auditarlo, o regenerarlo desde cero con tu propio agente. Todo lo que el prompt
+> pide construir ya existe (`app/dashboard_api.py`, `app/services/dashboard_service.py`,
+> `app/services/ghl_read_service.py`, `app/services/call_parsing.py`, el panel en
+> `dashboard/src/`) — puedes leerlo como referencia mientras sigues el prompt.
+
 ---
 
 ## Antes de empezar: qué necesitas tener
@@ -18,11 +27,18 @@
 2. **Acceso a tu Location de GoHighLevel** con contactos, calendario y pipeline —lo
    mismo que ya usa Sofía—.
 3. **Tu cuenta de Retell** con el agente inbound creado y su `llm_id`.
-4. **Node 20+** y **Python 3.11+** en tu máquina.
+4. **Node 20+** y **Python 3.12** en tu máquina (Modal no soporta versiones más
+   nuevas; el mismo requisito que pide `INSTALAR.md`).
 
 ---
 
 ## Prerrequisito que NO puedes saltarte: el refactor de `main.py`
+
+> **En este repo ya está hecho.** `app/services/call_parsing.py` existe y expone
+> `transcript_from(call)` y `phone_from_tool_calls(call)` (más `tool_calls_from` y
+> `booked_in_call`), y `main.py` ya importa de ahí. Esta sección queda como la
+> explicación de **por qué** ese módulo existe — y como el paso que sí tendrías que
+> dar si partieras del agente tal como se construyó en cámara, sin `call_parsing.py`.
 
 El backend de Sofía tiene dos funciones dentro de `app/main.py` que el análisis
 post-llamada usa para leer el payload de Retell:
@@ -245,6 +261,10 @@ puede mentirle a su dueño —arréglalo antes de entregarlo—.
 ---
 
 ## El comando de deploy (con el sufijo obligatorio)
+
+> En el repo final no corres esto a mano: **`/setup` despliega el backend a Modal
+> y el panel a Vercel** en un solo flujo (`INSTALAR.md`). El comando de abajo es lo
+> que `/setup` ejecuta por debajo, y lo que usas si redespliegas por tu cuenta.
 
 Cuando redespliegues el backend con los endpoints nuevos:
 

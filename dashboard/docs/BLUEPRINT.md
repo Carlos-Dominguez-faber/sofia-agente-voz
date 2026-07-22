@@ -20,6 +20,14 @@ escuchar grabaciones, y ver si los servicios están vivos.
 > que tiene que sentirse producto. El detalle de cómo un cambio llega en vivo —sin
 > dejarlo en un borrador— está en §5, y es la pieza más delicada del sistema.
 
+> **Dónde vive y cómo se despliega.** El panel no es un proyecto aparte: vive en
+> `dashboard/`, dentro del mismo repo que el backend (ver §9). Y no se despliega a
+> mano: el instalador (`INSTALAR.md` → `/setup`) despliega **las dos mitades** en un
+> solo flujo — el backend a **Modal** (`modal deploy app/main.py::modal_app`) y este
+> panel a **Vercel** (`scripts/setup.py vercel`: link + las 4 env vars + `vercel
+--prod`, generando las contraseñas del panel). GHL, el backend no lo despliega:
+> `/setup` **referencia** una Location ya armada.
+
 **Lo que NO es, y es la decisión central: no tiene base de datos.** No guarda ni
 un registro propio. Cada número que ves lo lee en vivo de dos fuentes:
 

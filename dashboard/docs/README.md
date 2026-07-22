@@ -8,6 +8,13 @@ una llamada y ver el estado de los servicios.
 backend de Sofía en Modal. Para el porqué de cada decisión, lee
 [`BLUEPRINT.md`](./BLUEPRINT.md).
 
+> **Este panel vive DENTRO del repo del agente**, en `dashboard/`. No es un
+> proyecto aparte. Y **normalmente no lo despliegas a mano:** el instalador del
+> curso (`INSTALAR.md` → `/setup`) despliega el backend a Modal **y** este panel
+> a Vercel en un solo flujo, generando sus contraseñas. Este README es para
+> **entenderlo**, correrlo en local, o redeplegarlo por tu cuenta. El deploy
+> automático está en §4.
+
 ---
 
 ## Requisitos
@@ -20,6 +27,11 @@ backend de Sofía en Modal. Para el porqué de cada decisión, lee
 ---
 
 ## 1. Configurar el entorno
+
+> **Si instalaste con `/setup`, este paso ya está hecho.** El instalador escribe
+> estas cuatro variables en Vercel y **genera** `DASHBOARD_PASSWORD` y
+> `DASHBOARD_SESSION_SECRET` por ti (§4). Sigue leyendo esta sección solo si
+> corres el panel en local o lo configuras a mano.
 
 El panel se configura con **cuatro** variables, todas de **solo servidor**. Ninguna
 lleva el prefijo `NEXT_PUBLIC_` a propósito: ese prefijo inyectaría el valor en el
@@ -83,10 +95,26 @@ esas dos variables y reinicias. No hay nada hardcodeado en el código.
 
 ## 4. Desplegar
 
-El panel es una app Next.js estándar. Lo único no negociable: **las cuatro variables
-de entorno se configuran en el panel de tu hosting**, nunca se commitean.
+### La forma normal: `/setup` lo hace por ti
 
-### Vercel, importando el repo desde GitHub
+Este panel se despliega como parte de la instalación del agente. Arrastras
+`INSTALAR.md` (en la raíz del repo) a tu agente, escribes **"instálalo"**, y
+`/setup` corre —entre otras cosas— el paso de Vercel:
+
+```bash
+python scripts/setup.py vercel   # lo que /setup ejecuta por debajo
+```
+
+Ese paso, desde `dashboard/`: hace `vercel link`, sube las **cuatro** variables de
+§1 a producción (**genera** `DASHBOARD_PASSWORD` y `DASHBOARD_SESSION_SECRET` si no
+existen, y toma `BACKEND_URL` de la `MODAL_URL` que dejó el deploy del backend), y
+hace `vercel --prod`. Al terminar imprime la **URL del panel y la contraseña**.
+
+Backend (Modal) y panel (Vercel) se despliegan así en el mismo flujo; no hay un
+`vercel --prod` a mano que recordar. Lo de abajo es solo para cuando lo despliegas
+**tú**, fuera del instalador.
+
+### A mano: Vercel importando el repo desde GitHub
 
 Este panel vive en el **subdirectorio `dashboard/`** de un repo que también contiene
 el backend en Python. Eso hace que **el Root Directory sea obligatorio** — sin él,
@@ -94,14 +122,14 @@ Vercel intenta construir desde la raíz del repo, no encuentra `package.json` y 
 
 Al importar el proyecto en Vercel, configura exactamente esto:
 
-| Ajuste | Valor |
-|--------|-------|
-| **Framework Preset** | Next.js (Vercel lo detecta solo) |
-| **Root Directory** | `dashboard` ← **crítico**, sin esto no compila |
-| **Build Command** | `next build` (default; no lo cambies) |
-| **Output Directory** | (déjalo en blanco; Next lo maneja) |
-| **Install Command** | `npm install` (default) |
-| **Node.js Version** | **20.x** (o superior) — también está fijado en `package.json` con `engines.node` |
+| Ajuste               | Valor                                                                            |
+| -------------------- | -------------------------------------------------------------------------------- |
+| **Framework Preset** | Next.js (Vercel lo detecta solo)                                                 |
+| **Root Directory**   | `dashboard` ← **crítico**, sin esto no compila                                   |
+| **Build Command**    | `next build` (default; no lo cambies)                                            |
+| **Output Directory** | (déjalo en blanco; Next lo maneja)                                               |
+| **Install Command**  | `npm install` (default)                                                          |
+| **Node.js Version**  | **20.x** (o superior) — también está fijado en `package.json` con `engines.node` |
 
 Luego, **Settings → Environment Variables**, agrega las cuatro (§1) como variables
 normales de servidor —**ninguna** marcada como expuesta al cliente, ninguna con
