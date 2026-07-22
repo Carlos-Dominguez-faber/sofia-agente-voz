@@ -8,9 +8,17 @@
 
 ## 1. Qué es y qué NO es
 
-Es un panel web para el dueño de la clínica. Muestra lo que hizo Sofía —llamadas,
-citas, temperatura de pacientes, el funnel— y deja hacer tres cosas: editar cómo
-habla Sofía, llamar a un paciente, y ver si los servicios están vivos.
+Es un **panel de control** para el dueño de la clínica. Muestra lo que hizo Sofía
+—llamadas, citas, temperatura de pacientes, el funnel— y le deja **cambiar cómo
+suena y se comporta**: la voz, la velocidad, la expresividad, qué tan apegada al
+guion está, y el guion mismo. Esos cambios **se publican a Retell en vivo** —en la
+siguiente llamada Sofía ya suena distinta—. También puede llamar a un paciente,
+escuchar grabaciones, y ver si los servicios están vivos.
+
+> **No es solo un visor.** Empezó siéndolo, y se subió a panel de control porque es
+> el entregable del One Click Install: el alumno se lo instala a sus clientes, así
+> que tiene que sentirse producto. El detalle de cómo un cambio llega en vivo —sin
+> dejarlo en un borrador— está en §5, y es la pieza más delicada del sistema.
 
 **Lo que NO es, y es la decisión central: no tiene base de datos.** No guarda ni
 un registro propio. Cada número que ves lo lee en vivo de dos fuentes:
@@ -29,11 +37,14 @@ corazón del backend del dashboard.
 Porque una base de datos propia sería una **segunda copia** de algo que ya vive en
 GHL y en Retell. Dos copias de la misma verdad divergen: se actualiza una y no la
 otra, y nadie sabe cuál creer. GHL es la única fuente de la verdad para el CRM;
-Retell lo es para el historial de llamadas. El dashboard **lee y presenta**, nunca
-almacena.
+Retell lo es para el historial de llamadas **y para la configuración del agente**.
+El dashboard no almacena: **lee** de esas dos fuentes, y cuando el cliente cambia
+algo, **escribe de vuelta a Retell** —nunca a una copia local que habría que
+sincronizar—.
 
-Consecuencia práctica: si quieres saber qué pasó con un paciente, lo ves en GHL, no
-en un log del dashboard.
+Consecuencia práctica: si quieres saber qué pasó con un paciente, lo ves en GHL; si
+quieres saber cómo está configurada Sofía, lo ves en Retell. El dashboard es la
+ventana y el control remoto, no el sistema.
 
 > **La única excepción, y es deliberada:** `app/services/prompt_history.py` guarda
 > **una** versión previa del prompt, en un `modal.Dict`. Ver §5. No es dato del CRM
@@ -210,7 +221,92 @@ la fuente de la verdad".
 
 ---
 
-## 6. La honestidad ante el error (por qué nunca ves un cero falso)
+## 6. La escritura a Retell: cómo un cambio llega EN VIVO (y no a un borrador)
+
+Esta es la pieza más delicada del panel de control, y la que costó un bug en dos
+videos antes de resolverse bien. Si copias algo de este proyecto, que sea esto.
+
+### El modelo de versiones de Retell (validado, no supuesto)
+
+En Retell, un agente y su LLM están **versionados**, y las versiones vienen en dos
+estados: **borrador** (`is_published: false`) y **publicada**. El número de teléfono
+sirve la **última versión publicada**. Y aquí está la trampa:
+
+- **`update` solo escribe a un borrador.** Editar el agente o el LLM crea/modifica un
+  borrador; el número sigue sirviendo la versión publicada vieja. **Guardaste y no
+  pasó nada en vivo.** Ese fue el bug del V07 y el V09: el prompt "se guardaba" y la
+  siguiente llamada seguía con el guion anterior.
+- **Publicar el agente publica también su LLM** —van acoplados—.
+- **Un LLM publicado está congelado:** `llm.update` sobre él responde
+  `400 "Cannot update published LLM"`. Ese error es lo que en el V09 llevó al
+  workaround equivocado de crear agentes nuevos (que deja huérfanos).
+- **La salida correcta es `agent.create_version(base_version=N)`:** genera un
+  borrador fresco del agente **y** un borrador acoplado del LLM, editable. No hace
+  falta crear agentes nuevos —cero huérfanos—.
+- Detalle que muerde: el campo de escritura es `model_temperature`, pero se lee como
+  `api_model_temperature`.
+
+### `publish_agent_change` — la máquina, en `retell_service.py`
+
+Todo cambio —voz, comportamiento, prompt— pasa por una sola función idempotente:
+
+```
+publish_agent_change(agent_id, **cambios):
+  1. hallar la última versión PUBLICADA          (nunca un borrador colgado)
+  2. create_version(base_version=<publicada>)     → borrador de agente + LLM acoplado
+  3. update del borrador: voz en el agente, temperatura/prompt en el LLM
+  4. publish(version=<borrador>)                  → agente y LLM, en vivo
+```
+
+Dos decisiones que sostienen la seguridad:
+
+- **Base en la PUBLICADA, nunca en un borrador colgado.** Un borrador a medias que
+  quedó de una prueba (o de una edición de la agencia en la consola de Retell) nunca
+  se empuja en vivo como efecto colateral del primer guardado. El borrador viejo
+  queda como historial inerte; el guardado publica encima, desde lo que ya está bueno.
+- **Fallo parcial honesto.** El cambio se aplica a **los dos agentes** (inbound y
+  outbound, para que suenen igual). Si el segundo falla, el endpoint devuelve error
+  nombrando cuál quedó y cuál no —nunca un "guardado" falso con los agentes
+  desincronizados—.
+
+### Los bounds viven en el backend, no en el front
+
+El cliente no puede romper a Sofía. Cada control está acotado **en el backend**, que
+revalida siempre —no confía en el front, que un bug o un usuario decidido puede
+saltarse—:
+
+- **Voz:** solo de una lista curada de voces es-419 (femeninas, acento mexicano —
+  Sofía es recepcionista mujer en todo el curso). Una voz fuera de la lista → 422.
+- **Velocidad:** acotada a `[0.85, 1.15]`.
+- **Comportamiento:** tres presets con nombre —**Estricta / Balanceada / Flexible**—
+  que mapean a temperatura `0.2 / 0.35 / 0.5`. El cliente nunca ve el número, y el
+  tope es 0.5.
+- **Lo que NO se expone:** las perillas de latencia y turn-taking
+  (`responsiveness`, `interruption_sensitivity`, `enable_backchannel`). Son las más
+  fáciles de romper y las que menos entiende un dueño de clínica; quedan como ajuste
+  de la agencia en la consola de Retell.
+
+### Las lecturas también apuntan a la PUBLICADA
+
+Un cambio que la escritura hizo bien, la lectura lo puede reportar mal. `retrieve`
+sin versión devuelve la **última** versión —que es el borrador cuando existe uno—.
+Así que las funciones que dicen "esto es lo que está en vivo" (`current_agent_config`,
+`get_live_prompt`) **fijan la versión publicada**, igual que la escritura. Sin eso,
+el panel mostraría el borrador de una edición de consola como si fuera lo vivo, y el
+baseline del deshacer capturaría un prompt que nadie está hablando.
+
+### El audio de las grabaciones va gated, nunca crudo
+
+Retell sirve las grabaciones desde una URL de CloudFront **sin autenticación**
+—cualquiera con la URL reproduce la llamada de un paciente, sin sesión—. El panel no
+devuelve esa URL: el backend **streamea los bytes** por
+`GET /dashboard/calls/{id}/recording`, tras el token, y el navegador la pide a un
+proxy de Next tras el gate de sesión. Al navegador solo le llega un booleano
+`has_recording`, nunca la dirección real. Es PII de paciente; se trata como tal.
+
+---
+
+## 7. La honestidad ante el error (por qué nunca ves un cero falso)
 
 Regla que no se negocia: **cuando una fuente no responde, eso viaja a la UI como una
 fuente caída, nunca como un cero.**
@@ -227,7 +323,7 @@ que debe atender.
 
 ---
 
-## 7. Dos gotchas de despliegue que fallan en silencio
+## 8. Dos gotchas de despliegue que fallan en silencio
 
 Los dos son de la misma familia: **fallan sin ruido y mienten sobre quién tuvo la
 culpa.** Anótalos, porque cualquiera que extienda esto se los va a topar.
@@ -266,36 +362,42 @@ aplicará a `modal run` cuando se despliegue el worker outbound.
 
 ---
 
-## 8. Estructura del código
+## 9. Estructura del código
 
 ```
 app/                              (backend, sobre Modal)
 ├── main.py                       endpoints de ACCIÓN (Retell) + monta el router del dashboard
-├── dashboard_api.py              los 10 endpoints de LECTURA, bajo /dashboard, tras el token
+├── dashboard_api.py              los endpoints de LECTURA y ESCRITURA, bajo /dashboard, tras el token
 ├── auth.py                       la validación del token (capa 1)
 └── services/
-    ├── dashboard_service.py      los joins Retell↔GHL y las métricas
+    ├── dashboard_service.py      los joins Retell↔GHL, las métricas, y el recording gated
     ├── ghl_read_service.py       lecturas de GHL (ghl_service.py, el de escritura, intacto)
     ├── call_parsing.py           parseo de transcripción y tool-calls (compartido con main.py)
     ├── prompt_guard.py           la protección de la sección 11
     ├── prompt_history.py         el deshacer (la excepción al "sin estado")
-    └── retell_service.py         lecturas de Retell + provisioning
+    └── retell_service.py         lecturas + escritura a Retell (publish_agent_change) + provisioning
 
 dashboard/                        (panel, Next.js)
 └── src/
     ├── proxy.ts                  el gate de la capa 2 (default-deny)
     ├── config/branding.ts        marca por cliente — UN archivo
     ├── lib/api.ts                el ÚNICO que habla con el backend; adjunta el token server-side
-    ├── app/api/…/route.ts        los proxies explícitos (NO comodín)
-    └── components/               las 7 secciones + SourceState (el que impide el cero falso)
+    ├── app/api/…/route.ts        los proxies explícitos (NO comodín), incluido el de audio streamed
+    └── components/               las secciones + AgentConfig + SourceState (el que impide el cero falso)
 ```
 
 Los endpoints del backend, para referencia:
 
 ```
+LECTURA
 GET  /dashboard/metrics              GET  /dashboard/calls
 GET  /dashboard/funnel               GET  /dashboard/calls/{call_id}
-GET  /dashboard/leads/temperature    GET  /dashboard/agent/prompt
-GET  /dashboard/services/status      PUT  /dashboard/agent/prompt
-POST /dashboard/outbound/call        POST /dashboard/agent/prompt/undo
+GET  /dashboard/leads/temperature    GET  /dashboard/calls/{call_id}/recording   (audio streamed)
+GET  /dashboard/services/status      GET  /dashboard/agent/prompt
+GET  /dashboard/agent-config
+
+ESCRITURA (van a Retell vía publish_agent_change, con update + publish)
+PUT  /dashboard/agent/prompt         POST /dashboard/agent/prompt/undo
+POST /dashboard/agent-config         (voz + comportamiento, ambos agentes)
+POST /dashboard/outbound/call        POST /dashboard/test-call
 ```

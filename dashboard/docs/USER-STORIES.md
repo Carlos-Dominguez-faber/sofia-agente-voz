@@ -1,13 +1,18 @@
 # USER STORIES — El dashboard de Sofía
 
-> Las siete secciones del panel, contadas desde la silla del **dueño de la
-> clínica**. No es quien construyó el sistema: es quien lo abre en la mañana con
-> un café para saber si valió la pena pagarlo. Cada historia trae su criterio de
-> aceptación —cómo sabemos que quedó bien— y el porqué detrás.
+> Las secciones del panel, contadas desde la silla del **dueño de la clínica**. No
+> es quien construyó el sistema: es quien lo abre en la mañana con un café para
+> saber si valió la pena pagarlo. Cada historia trae su criterio de aceptación
+> —cómo sabemos que quedó bien— y el porqué detrás.
+>
+> Las historias 1–5 y 10–11 son de lectura y acciones puntuales; **las 6–9 son el
+> salto a panel de control**: el dueño cambia cómo suena y se comporta Sofía, y esos
+> cambios se publican a las llamadas en vivo.
 
 El personaje: **el Dr. o la dueña de "Clínica Dental Sonrisa Perfecta".** No es
 técnico. No quiere entrar a Retell, ni a GoHighLevel, ni a leer un log. Quiere una
-página que le diga, de un vistazo, si Sofía trabajó.
+página que le diga, de un vistazo, si Sofía trabajó —y poder ajustarla sin llamar a
+nadie.
 
 ---
 
@@ -81,15 +86,15 @@ alimenta un embudo real, no solo que contesta el teléfono.
 > **quiero** ver la lista de las últimas llamadas con quién llamó, cuándo, cuánto
 > duró, si agendó y un resumen,
 > **y poder abrir una** para leer la conversación completa,
-> **para** revisar una llamada puntual sin escuchar el audio ni entrar a Retell.
+> **para** revisar una llamada puntual sin entrar a Retell.
 
 **Criterios de aceptación:**
 
 - Tabla con: paciente, fecha, origen, duración, resultado (agendó / no agendó),
   urgencia, resumen.
 - Un renglón se abre y muestra el resumen completo, los scores (interés,
-  probabilidad de asistir), qué hizo el sistema (qué tools se dispararon) y la
-  transcripción entera.
+  probabilidad de asistir), qué hizo el sistema (qué tools se dispararon), la
+  transcripción entera, y —cuando existe— la grabación (ver historia 8).
 - Una llamada **sin teléfono** —una web call, o alguien que colgó antes de dar sus
   datos— aparece como "Sin identificar", no como un renglón roto ni vacío.
 - Si GHL está caído pero Retell no, la tabla igual muestra las llamadas y sus
@@ -129,7 +134,99 @@ querer, convierta a su recepcionista en un riesgo legal.
 
 ---
 
-## 6. Llamar a un paciente
+## 6. Cambiar la voz de Sofía
+
+> **Como** dueña,
+> **quiero** elegir cómo suena la voz de Sofía —cuál voz, qué tan rápido habla, cuánta
+> emoción pone—,
+> **para** que suene como quiero que suene mi clínica, sin pedirle nada a nadie.
+
+**Criterios de aceptación:**
+
+- Un menú con **voces ya elegidas** (femeninas, español de México); no un catálogo
+  interminable donde equivocarse. La voz actual está en la lista.
+- Un control de **velocidad** que no puede pasarse de lento ni de rápido —el panel no
+  deja salirse del rango que suena bien—.
+- Un **interruptor de expresividad**: más cálida o más neutra.
+- Al guardar, **el cambio se aplica a las llamadas de inmediato** —entrantes y
+  salientes—, sin que la dueña tenga que publicar nada ni entender de versiones.
+- Un botón **"Llámame para probar"** (historia 9) para oír el resultado en segundos.
+
+**Por qué importa:** la voz es la primera impresión de la clínica. Poder ajustarla
+sola, en un minuto, es lo que hace sentir el panel como un producto y no como una
+demo. Y como las opciones están acotadas, **no hay forma de romper a Sofía** eligiendo
+algo raro.
+
+---
+
+## 7. Ajustar el comportamiento de Sofía
+
+> **Como** dueña,
+> **quiero** decir qué tan apegada al guion está Sofía —más estricta o más
+> conversacional—,
+> **para** afinar su tono sin tocar configuraciones técnicas que no entiendo.
+
+**Criterios de aceptación:**
+
+- Tres opciones con nombre claro: **Estricta**, **Balanceada**, **Flexible** —nunca un
+  número ni jerga—.
+- Cada una explica en una línea qué esperar ("se ciñe al guion" / "natural pero
+  enfocada" / "más espontánea").
+- Al guardar, se aplica en vivo a los dos agentes, igual que la voz.
+- Por diseño, **ninguna opción puede volver a Sofía impredecible**: incluso la más
+  flexible está dentro de un límite seguro.
+
+**Por qué importa:** deja al dueño encontrar el tono de su clínica —una odontopediatría
+quiere cálida y suelta; una de alta especialidad, seca y precisa— sin arriesgar que
+Sofía empiece a improvisar de más.
+
+---
+
+## 8. Escuchar la grabación de una llamada
+
+> **Como** dueña,
+> **quiero** reproducir el audio de una llamada, no solo leer la transcripción,
+> **para** oír con mis propios oídos cómo trató Sofía a un paciente.
+
+**Criterios de aceptación:**
+
+- Dentro del detalle de una llamada, un **reproductor de audio** cuando esa llamada
+  tiene grabación.
+- El audio se trata como **información privada del paciente**: solo se puede
+  reproducir con la sesión del panel abierta; nunca queda expuesto en una dirección
+  pública que alguien pueda compartir.
+- Un aviso de que es audio real de un paciente.
+
+**Por qué importa:** leer una transcripción no transmite el tono. Oír la llamada es
+lo que le da al dueño la confianza de que Sofía suena como una recepcionista de
+verdad. Y como es la voz de un paciente real, **tiene que estar protegida** —no basta
+con esconder el enlace—.
+
+---
+
+## 9. "Llámame para probar"
+
+> **Como** dueña,
+> **quiero** que Sofía me llame a mí ahora mismo con la configuración que acabo de
+> guardar,
+> **para** escuchar los cambios en una llamada real, no imaginármelos.
+
+**Criterios de aceptación:**
+
+- Un campo para mi número y un botón "Llámame para probar".
+- Sofía marca de inmediato con la **voz y el comportamiento actuales** —lo que se
+  acaba de aplicar—.
+- Recuerda mi número para la próxima vez (sin que el sistema lo guarde como dato de
+  la clínica).
+- Avisa que consume unos centavos de minutos de salida.
+
+**Por qué importa:** cierra el ciclo. Cambio la voz → me llamo → la oigo → ajusto.
+Sin esto, el dueño edita a ciegas y no sabe si quedó como quería hasta que llama un
+paciente real.
+
+---
+
+## 10. Llamar a un paciente
 
 > **Como** dueña,
 > **quiero** escribir un número y que Sofía llame ahora mismo,
@@ -148,7 +245,7 @@ un teléfono—, así que tiene que ser deliberada y clara.
 
 ---
 
-## 7. Estado del sistema
+## 11. Estado del sistema
 
 > **Como** dueña,
 > **quiero** ver si las piezas del sistema están funcionando,
