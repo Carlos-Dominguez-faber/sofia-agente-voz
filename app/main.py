@@ -174,6 +174,12 @@ class RetellToolRequest(BaseModel):
     """
 
     call_id: str | None = None
+    # The line the call is physically on, straight from the telephony layer —
+    # NOT transcribed by the LLM, so it cannot be corrupted the way a spoken
+    # phone number can. This is what makes the phantom-number bug fixable.
+    from_number: str | None = None
+    to_number: str | None = None
+    direction: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -185,13 +191,18 @@ class RetellToolRequest(BaseModel):
         if isinstance(args, Mapping):
             payload.update(args)
         call = data.get("call")
-        if isinstance(call, Mapping) and not payload.get("call_id"):
-            payload["call_id"] = call.get("call_id") or call.get("callId")
+        if isinstance(call, Mapping):
+            if not payload.get("call_id"):
+                payload["call_id"] = call.get("call_id") or call.get("callId")
+            # Only the envelope carries these; never let a spoofed arg win.
+            for key in ("from_number", "to_number", "direction"):
+                if call.get(key) is not None:
+                    payload[key] = call.get(key)
         return payload
 
 
 class CreateLeadRequest(RetellToolRequest):
-    phone: str
+    phone: str | None = None
     first_name: str | None = None
     last_name: str | None = None
     email: str | None = None
@@ -207,7 +218,7 @@ class CheckAvailabilityRequest(RetellToolRequest):
 
 
 class BookAppointmentRequest(RetellToolRequest):
-    phone: str
+    phone: str | None = None
     start_time: str = Field(description="ISO local de la clínica, ej. 2026-07-21T16:00:00")
     first_name: str | None = None
     last_name: str | None = None
@@ -227,6 +238,67 @@ class UpdateLeadStatusRequest(RetellToolRequest):
     stage_id: str | None = None
     opportunity_id: str | None = None
     opportunity_name: str | None = None
+
+
+# --------------------------------------------------------------------------
+# Phone number of record — the one write path that must never be corrupted
+# --------------------------------------------------------------------------
+
+
+def _line_number(req: RetellToolRequest) -> str | None:
+    """The patient's number as the telephony layer sees it, or None.
+
+    Inbound: the caller ID they are dialling from. Outbound: the number we
+    dialled — which the worker itself chose from GHL, so it is correct by
+    construction. Both come off the SIP signalling, never off speech-to-text.
+    A web/test call with no PSTN leg carries neither, hence None.
+    """
+    direction = (req.direction or "").lower()
+    if direction == "outbound":
+        return req.to_number
+    if direction == "inbound":
+        return req.from_number
+    return None
+
+
+def phone_of_record(req: RetellToolRequest, spoken_phone: str | None) -> tuple[str, str]:
+    """The phone to actually write to GHL, and where it came from.
+
+    This is the fix for the phantom-number bug. Sofía once confirmed a caller's
+    digits correctly out loud and then handed book_appointment a DIFFERENT
+    number — the LLM re-transcribed its own confirmation and corrupted it. The
+    appointment booked against a number that does not exist; the patient hung up
+    happy and the clinic could never reach them.
+
+    The telephony line is ground truth: the caller is provably on it right now
+    (inbound) or we just dialled it from the CRM (outbound). So the line wins.
+    The spoken number is only used when there is no line at all (a web test), and
+    a disagreement between the two is logged loudly — it is the exact signature
+    of the bug, and worth seeing even now that it can no longer do damage.
+
+    Raises ValueError when neither source yields a valid number, so the caller
+    can fail honestly instead of booking against garbage.
+    """
+    line = _line_number(req)
+    if line:
+        line_e164 = ghl.to_e164(line)
+        if spoken_phone:
+            try:
+                spoken_e164 = ghl.to_e164(spoken_phone)
+            except ValueError:
+                spoken_e164 = None
+            if spoken_e164 and spoken_e164 != line_e164:
+                LOG.warning(
+                    "Phone mismatch on call=%s: model passed %s but the line is %s — trusting the line",
+                    req.call_id,
+                    spoken_e164,
+                    line_e164,
+                )
+        return line_e164, "line"
+
+    # No PSTN leg (web/test call): the spoken number is all there is. It still
+    # goes through to_e164, which raises on anything that is not valid E.164.
+    return ghl.to_e164(spoken_phone or ""), "spoken"
 
 
 # --------------------------------------------------------------------------
@@ -338,8 +410,18 @@ async def create_lead(payload: CreateLeadRequest) -> JSONResponse:
     if payload.reason and reason_key:
         custom_fields[reason_key] = payload.reason
 
+    try:
+        phone, _ = phone_of_record(payload, payload.phone)
+    except ValueError as exc:
+        return fail(
+            status=400,
+            code="invalid_input",
+            detail=f"No usable phone number: {exc}",
+            message="No pude tomar tu número. ¿Me lo repites, por favor?",
+        )
+
     contact = ghl.upsert_contact(
-        phone=payload.phone,
+        phone=phone,
         first_name=payload.first_name,
         last_name=payload.last_name,
         email=payload.email,
@@ -462,11 +544,24 @@ async def book_appointment(payload: BookAppointmentRequest) -> JSONResponse:
     if payload.reason and reason_key:
         custom_fields[reason_key] = payload.reason
 
+    # The number of record comes from the telephony line, not the model's
+    # transcription of it — see phone_of_record. This is the guard that stops a
+    # confirmed-but-corrupted number from booking a phantom appointment.
+    try:
+        phone, _ = phone_of_record(payload, payload.phone)
+    except ValueError as exc:
+        return fail(
+            status=400,
+            code="invalid_input",
+            detail=f"No usable phone number: {exc}",
+            message="No pude tomar tu número para agendar. ¿Me lo confirmas, por favor?",
+        )
+
     # The temperature tag is NOT passed to upsert_contact: that write is additive
     # and would stack on top of whatever tag is already there. It goes through
     # set_temperature_tag below, once the contact exists.
     contact = ghl.upsert_contact(
-        phone=payload.phone,
+        phone=phone,
         first_name=payload.first_name,
         last_name=payload.last_name,
         email=payload.email,
@@ -500,7 +595,7 @@ async def book_appointment(payload: BookAppointmentRequest) -> JSONResponse:
     warnings: list[str] = []
     opportunity_id = None
     treatment = payload.treatment or str(ghl.config_value("knowledge_base.valoracion.name", "Cita de valoración"))
-    display_name = " ".join(filter(None, [payload.first_name, payload.last_name])) or payload.phone
+    display_name = " ".join(filter(None, [payload.first_name, payload.last_name])) or phone
 
     try:
         opportunity = ghl.create_opportunity(
@@ -543,16 +638,26 @@ async def book_appointment(payload: BookAppointmentRequest) -> JSONResponse:
 @web_app.post("/update-lead-status")
 async def update_lead_status(payload: UpdateLeadStatusRequest) -> JSONResponse:
     """Sets the lead temperature and moves the patient's card along the pipeline."""
-    if not payload.contact_id and not payload.phone:
+    # Prefer the telephony line over a spoken phone here too: a corrupted number
+    # would upsert a brand-new phantom contact and tag THAT instead of the
+    # patient on the call.
+    lookup_phone = None
+    if not payload.contact_id:
+        try:
+            lookup_phone, _ = phone_of_record(payload, payload.phone)
+        except ValueError:
+            lookup_phone = None
+
+    if not payload.contact_id and not lookup_phone:
         return fail(
             status=400,
             code="invalid_input",
-            detail="Either contact_id or phone is required",
+            detail="Either contact_id or a usable phone is required",
             message="Me falta identificar al paciente.",
         )
 
     # upsert is idempotent by phone, so it doubles as a lookup with no extra endpoint.
-    contact_id = payload.contact_id or ghl.upsert_contact(phone=payload.phone)["id"]
+    contact_id = payload.contact_id or ghl.upsert_contact(phone=lookup_phone)["id"]
 
     applied_tags: list[str] = []
     if payload.temperature:
