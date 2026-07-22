@@ -57,3 +57,6 @@ Thumbs.db
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Demo del intro V00 — trae un número real hardcodeado, no versionar
+scripts/demo_intro.py

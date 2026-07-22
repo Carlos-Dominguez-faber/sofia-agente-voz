@@ -206,8 +206,10 @@ dashboard/
 
 1. **El navegador nunca ve una credencial.** Todo pasa por `api.ts` del lado del
    servidor.
-2. **El panel solo lee.** Los proxies son explícitos, uno por operación permitida —
-   nunca un comodín que pudiera alcanzar los endpoints de acción del agente.
+2. **Cada proxy es explícito, uno por operación permitida** — la lectura y las
+   escrituras acotadas del panel (voz, comportamiento y el prompt vía publish).
+   Nunca un comodín que pudiera alcanzar los endpoints de acción que Retell usa
+   en llamada (`/create-lead`, `/book-appointment`, …).
 
 ---
 
